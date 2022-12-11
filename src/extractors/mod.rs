@@ -5,6 +5,7 @@ use async_trait::async_trait;
 
 use axum::{extract::FromRequestParts, http::request::Parts, Extension};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
+use crate::session::SessionHandle;
 
 // use crate::SessionHandle;
 
@@ -24,7 +25,7 @@ impl<Data> Deref for ReadableSession<Data> {
 }
 
 #[async_trait]
-impl<S, Data> FromRequestParts<S> for ReadableSession<Data>
+impl<S, Data: Send + Sync + 'static> FromRequestParts<S> for ReadableSession<Data>
     where
         S: Send + Sync,
 {
@@ -44,33 +45,33 @@ impl<S, Data> FromRequestParts<S> for ReadableSession<Data>
 /// An extractor which provides a writable session. Sessions may have only one
 /// writer.
 #[derive(Debug)]
-pub struct WritableSession {
-    session: OwnedRwLockWriteGuard<async_session::Session>,
+pub struct WritableSession<Data> {
+    session: OwnedRwLockWriteGuard<typed_session::Session<Data>>,
 }
 
-impl Deref for WritableSession {
-    type Target = OwnedRwLockWriteGuard<async_session::Session>;
+impl<Data> Deref for WritableSession<Data> {
+    type Target = OwnedRwLockWriteGuard<typed_session::Session<Data>>;
 
     fn deref(&self) -> &Self::Target {
         &self.session
     }
 }
 
-impl DerefMut for WritableSession {
+impl<Data> DerefMut for WritableSession<Data> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.session
     }
 }
 
 #[async_trait]
-impl<S> FromRequestParts<S> for WritableSession
+impl<S, Data: Send + Sync + 'static> FromRequestParts<S> for WritableSession<Data>
     where
         S: Send + Sync,
 {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Extension(session_handle): Extension<SessionHandle> =
+        let Extension(session_handle): Extension<SessionHandle<Data>> =
             Extension::from_request_parts(parts, state)
                 .await
                 .expect("Session extension missing. Is the session layer installed?");

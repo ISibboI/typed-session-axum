@@ -13,8 +13,14 @@ documentation = "https://docs.rs/typed-session-axum"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-typed-session = "0.1.0-alpha.0"
+typed-session = "0.1.0-alpha.7"
 http-body = "0.4.5"
 tracing = "0.1"
 async-trait = "0.1.59"
 axum = {version = "0.6.1", features = ["headers"]}
+axum-extra = { version = "0.4.2", features = ["cookie"] }
+tokio = {version = "1.23.0", features = ["sync"]}
+tower = "0.4.13"
+futures = "0.3.25"
+rand = "0.8.5"
+time = "0.3.17"

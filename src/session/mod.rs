@@ -6,8 +6,9 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+use std::fmt::Debug;
 
-use typed_session::{SessionStore, SessionStoreImplementation};
+use typed_session::{SessionCookieCommand, SessionStore, SessionStoreImplementation};
 use axum::{
     http::{
         header::{HeaderValue, COOKIE, SET_COOKIE},
@@ -15,12 +16,13 @@ use axum::{
     },
     response::Response,
 };
-use axum_extra::extract::cookie::{Cookie, Key, SameSite};
+use axum_extra::extract::cookie::{Cookie, SameSite};
 use futures::future::BoxFuture;
+use rand::rngs::StdRng;
+use rand::{SeedableRng};
+use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tower::{Layer, Service};
-
-const BASE64_DIGEST_LEN: usize = 44;
 
 /// A type alias which provides a handle to the underlying session.
 ///
@@ -33,31 +35,17 @@ const BASE64_DIGEST_LEN: usize = 44;
 /// handle directly.
 pub type SessionHandle<Data> = Arc<RwLock<typed_session::Session<Data>>>;
 
-/// Controls how the session data is persisted and created.
-#[derive(Clone)]
-pub enum PersistencePolicy {
-    /// Always ping the storage layer and store empty "guest" sessions.
-    Always,
-    /// Do not store empty "guest" sessions, only ping the storage layer if
-    /// the session data changed.
-    ChangedOnly,
-    /// Do not store empty "guest" sessions, always ping the storage layer for
-    /// existing sessions.
-    ExistingOnly,
-}
-
 /// Layer that provides cookie-based sessions.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SessionLayer<Data, Implementation, const COOKIE_LENGTH: usize = 64> {
     store: SessionStore<Data, Implementation, COOKIE_LENGTH>,
     cookie_path: String,
     cookie_name: String,
     cookie_domain: Option<String>,
-    persistence_policy: PersistencePolicy,
     session_ttl: Option<Duration>,
+    min_session_renew_time: Option<Duration>,
     same_site_policy: SameSite,
     secure: bool,
-    key: Key,
 }
 
 impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH: usize> SessionLayer<Data, Implementation, COOKIE_LENGTH> {
@@ -80,7 +68,7 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
     /// of your application:
     ///
     /// ```rust
-    /// # use axum_sessions::{PersistencePolicy, SessionLayer, typed_session::MemoryStore, SameSite};
+    /// # use typed_session_axum::{PersistencePolicy, SessionLayer, typed_session::MemoryStore, SameSite};
     /// # use std::time::Duration;
     /// SessionLayer::new(
     ///     MemoryStore::new(),
@@ -90,38 +78,25 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
     /// .with_cookie_name("your.cookie.name")
     /// .with_cookie_path("/some/path")
     /// .with_cookie_domain("www.example.com")
-    /// .with_same_site_policy(SameSite::Lax)
+    /// .with_session_ttl(Some(Duration::from_secs(60 * 5)))
     /// .with_session_ttl(Some(Duration::from_secs(60 * 5)))
     /// .with_persistence_policy(PersistencePolicy::Always)
     /// .with_secure(true);
     /// ```
-    pub fn new(store: Implementation, secret: &[u8]) -> Self {
-        if secret.len() < 64 {
-            panic!("`secret` must be at least 64 bytes.")
-        }
-
+    pub fn new(store: Implementation) -> Self {
         Self {
             store: SessionStore::new(store),
-            persistence_policy: PersistencePolicy::Always,
             cookie_path: "/".into(),
             cookie_name: "axum.sid".into(),
             cookie_domain: None,
             same_site_policy: SameSite::Strict,
             session_ttl: Some(Duration::from_secs(24 * 60 * 60)),
+            min_session_renew_time: None,
             secure: true,
-            key: Key::from(secret),
         }
     }
 
-    /// When `true`, a session cookie will always be set. When `false` the
-    /// session data must be modified in order for it to be set. Defaults to
-    /// `true`.
-    pub fn with_persistence_policy(mut self, policy: PersistencePolicy) -> Self {
-        self.persistence_policy = policy;
-        self
-    }
-
-    /// Sets a cookie for the session. Defaults to `"/"`.
+    /// Sets a cookie path for the session. Defaults to `"/"`.
     pub fn with_cookie_path(mut self, cookie_path: impl AsRef<str>) -> Self {
         self.cookie_path = cookie_path.as_ref().to_owned();
         self
@@ -139,13 +114,13 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
         self
     }
 
-    /// Decide if session is presented to the storage layer.
+    /*/// Decide if session is presented to the storage layer.
     fn should_store(&self, cookie_value: &Option<String>, session_data_changed: bool) -> bool {
         session_data_changed
             || matches!(self.persistence_policy, PersistencePolicy::Always)
             || (matches!(self.persistence_policy, PersistencePolicy::ExistingOnly)
             && cookie_value.is_some())
-    }
+    }*/
 
     /// Sets a cookie same site policy for the session. Defaults to
     /// `SameSite::Strict`.
@@ -161,23 +136,18 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
         self
     }
 
+    /// Sets the minimum time to wait between renewing the session.
+    /// Renewing means changing the session key, and in turn updating the ttl.
+    /// Defaults to `None`.
+    pub fn with_min_session_renew_time(mut self, min_session_renew_time: Option<Duration>) -> Self {
+        self.min_session_renew_time = min_session_renew_time;
+        self
+    }
+
     /// Sets a cookie secure attribute for the session. Defaults to `true`.
     pub fn with_secure(mut self, secure: bool) -> Self {
         self.secure = secure;
         self
-    }
-
-    async fn load_or_create(&self, cookie_value: Option<String>) -> SessionHandle {
-        let session = match cookie_value {
-            Some(cookie_value) => self.store.load_session(cookie_value).await.ok().flatten(),
-            None => None,
-        };
-
-        Arc::new(RwLock::new(
-            session
-                .and_then(typed_session::Session::validate)
-                .unwrap_or_default(),
-        ))
     }
 
     fn build_cookie(&self, cookie_value: String) -> Cookie<'static> {
@@ -196,8 +166,6 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
             cookie.set_domain(cookie_domain)
         }
 
-        self.sign_cookie(&mut cookie);
-
         cookie
     }
 
@@ -215,68 +183,45 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
 
         cookie.make_removal();
 
-        self.sign_cookie(&mut cookie);
-
         cookie
-    }
-
-    // the following is reused verbatim from
-    // https://github.com/SergioBenitez/cookie-rs/blob/master/src/secure/signed.rs#L33-L43
-    /// Signs the cookie's value providing integrity and authenticity.
-    fn sign_cookie(&self, cookie: &mut Cookie<'_>) {
-        // Compute HMAC-SHA256 of the cookie's value.
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.key.signing()).expect("good key");
-        mac.update(cookie.value().as_bytes());
-
-        // Cookie's new value is [MAC | original-value].
-        let mut new_value = base64::encode(mac.finalize().into_bytes());
-        new_value.push_str(cookie.value());
-        cookie.set_value(new_value);
-    }
-
-    // the following is reused verbatim from
-    // https://github.com/SergioBenitez/cookie-rs/blob/master/src/secure/signed.rs#L45-L63
-    /// Given a signed value `str` where the signature is prepended to `value`,
-    /// verifies the signed value and returns it. If there's a problem, returns
-    /// an `Err` with a string describing the issue.
-    fn verify_signature(&self, cookie_value: &str) -> Result<String, &'static str> {
-        if cookie_value.len() < BASE64_DIGEST_LEN {
-            return Err("length of value is <= BASE64_DIGEST_LEN");
-        }
-
-        // Split [MAC | original-value] into its two parts.
-        let (digest_str, value) = cookie_value.split_at(BASE64_DIGEST_LEN);
-        let digest = base64::decode(digest_str).map_err(|_| "bad base64 digest")?;
-
-        // Perform the verification.
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.key.signing()).expect("good key");
-        mac.update(value.as_bytes());
-        mac.verify(&digest)
-            .map(|_| value.to_string())
-            .map_err(|_| "value did not verify")
     }
 }
 
-impl<Inner, Store: SessionStore> Layer<Inner> for SessionLayer<Store> {
-    type Service = Session<Inner, Store>;
+impl<Data: Default + Debug, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH: usize> SessionLayer<Data, Implementation, COOKIE_LENGTH> {
+    async fn load_or_create(&self, cookie_value: Option<impl AsRef<str>>) -> SessionHandle<Data> {
+        let session = match cookie_value {
+            Some(cookie_value) => self.store.load_session(cookie_value).await.ok().flatten(),
+            None => None,
+        };
+
+        Arc::new(RwLock::new(
+            session
+                .unwrap_or_default(),
+        ))
+    }
+}
+
+impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clone> Layer<Inner> for SessionLayer<Data, Implementation> {
+    type Service = Session<Inner, Data, Implementation>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
         Session {
             inner,
             layer: self.clone(),
+            rng: StdRng::from_entropy(),
         }
     }
 }
 
 /// Session service container.
-#[derive(Clone)]
-pub struct Session<Inner, Store: SessionStore> {
+pub struct Session<Inner, Data, Implementation: SessionStoreImplementation<Data>> {
     inner: Inner,
-    layer: SessionLayer<Store>,
+    layer: SessionLayer<Data, Implementation>,
+    rng: StdRng,
 }
 
-impl<Inner, ReqBody, ResBody, Store: SessionStore> Service<Request<ReqBody>>
-for Session<Inner, Store>
+impl<Inner, ReqBody, ResBody, Data: Clone + Default + Debug + Send + Sync, Implementation: SessionStoreImplementation<Data> + Clone + Send + Sync> Service<Request<ReqBody>>
+for Session<Inner, Data, Implementation>
     where
         Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
         ResBody: Send + 'static,
@@ -292,12 +237,12 @@ for Session<Inner, Store>
     }
 
     fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
-        let session_layer = self.layer.clone();
+        let session_layer = &mut self.layer;
 
         // Multiple cookies may be all concatenated into a single Cookie header
         // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
         // Cookie headers (HTTP/2 behaviour). Search for the session cookie from
-        // all Cookie headers, assuming both forms are possible
+        // all Cookie headers, assuming both forms are possible.
         let cookie_value = request
             .headers()
             .get_all(COOKIE)
@@ -306,12 +251,13 @@ for Session<Inner, Store>
             .flat_map(|cookie_header| cookie_header.split(';'))
             .filter_map(|cookie_header| Cookie::parse_encoded(cookie_header.trim()).ok())
             .filter(|cookie| cookie.name() == session_layer.cookie_name)
-            .find_map(|cookie| self.layer.verify_signature(cookie.value()).ok());
+            .map(|cookie| cookie.value().to_owned())
+            .next();
 
         let inner = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
         Box::pin(async move {
-            let session_handle = session_layer.load_or_create(cookie_value.clone()).await;
+            let session_handle = session_layer.load_or_create(cookie_value).await;
 
             let mut session = session_handle.write().await;
             if let Some(ttl) = session_layer.session_ttl {
@@ -322,51 +268,30 @@ for Session<Inner, Store>
             request.extensions_mut().insert(session_handle.clone());
             let mut response = inner.call(request).await?;
 
-            let session = session_handle.read().await;
-            let (session_is_destroyed, session_data_changed) =
-                (session.is_destroyed(), session.data_changed());
-            drop(session);
-
-            // Pull out the session so we can pass it to the store without `Clone` blowing
-            // away the `cookie_value`.
             let session = RwLock::into_inner(
                 Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
             );
-            if session_is_destroyed {
-                if let Err(e) = session_layer.store.destroy_session(session).await {
-                    tracing::error!("Failed to destroy session: {:?}", e);
+            match session_layer.store.store_session(session, &mut self.rng).await {
+                Ok(SessionCookieCommand::DoNothing) => {},
+                Ok(SessionCookieCommand::Set {cookie_value, expiry}) => {
+                    let mut cookie = session_layer.build_cookie(cookie_value);
+                    if let Some(expiry) = expiry {
+                        cookie.set_expires(Some(OffsetDateTime::from_unix_timestamp(expiry.timestamp()).unwrap()));
+                    }
+
+                    response.headers_mut().append(SET_COOKIE, HeaderValue::from_str(&cookie.to_string()).unwrap());
+                },
+                Ok(SessionCookieCommand::Delete) => {
+                    let removal_cookie = session_layer.build_removal_cookie();
+
+                    response.headers_mut().append(
+                        SET_COOKIE,
+                        HeaderValue::from_str(&removal_cookie.to_string()).unwrap(),
+                    );
+                },
+                Err(error) => {
+                    tracing::error!("Failed to store session: {error:?}");
                     *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                }
-
-                let removal_cookie = session_layer.build_removal_cookie();
-
-                response.headers_mut().append(
-                    SET_COOKIE,
-                    HeaderValue::from_str(&removal_cookie.to_string()).unwrap(),
-                );
-
-                // Store if
-                //  - We have guest sessions
-                //  - We received a valid cookie and we use the `ExistingOnly`
-                //    policy.
-                //  - If we use the `ChangedOnly` policy, only
-                //    `session.data_changed()` should trigger this branch.
-            } else if session_layer.should_store(&cookie_value, session_data_changed) {
-                match session_layer.store.store_session(session).await {
-                    Ok(Some(cookie_value)) => {
-                        let cookie = session_layer.build_cookie(cookie_value);
-                        response.headers_mut().append(
-                            SET_COOKIE,
-                            HeaderValue::from_str(&cookie.to_string()).unwrap(),
-                        );
-                    }
-
-                    Ok(None) => {}
-
-                    Err(e) => {
-                        tracing::error!("Failed to reach session storage: {:?}", e);
-                        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    }
                 }
             }
 
@@ -377,10 +302,6 @@ for Session<Inner, Store>
 
 #[cfg(test)]
 mod tests {
-    use async_session::{
-        serde::{Deserialize, Serialize},
-        serde_json,
-    };
     use axum::http::{Request, Response};
     use http::{
         header::{COOKIE, SET_COOKIE},
@@ -390,7 +311,6 @@ mod tests {
     use rand::Rng;
     use tower::{BoxError, Service, ServiceBuilder, ServiceExt};
 
-    use super::PersistencePolicy;
     use crate::{async_session::MemoryStore, SessionHandle, SessionLayer};
 
     #[derive(Deserialize, Serialize, PartialEq, Debug)]
