@@ -1,14 +1,13 @@
 // Much of this code is lifted directly from
 // `tide::sessions::middleware::SessionMiddleware`. See: https://github.com/http-rs/tide/blob/20fe435a9544c10f64245e883847fc3cd1d50538/src/sessions/middleware.rs
 
+use std::fmt::Debug;
 use std::{
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
-use std::fmt::Debug;
 
-use typed_session::{SessionCookieCommand, SessionStore, SessionStoreImplementation};
 use axum::{
     http::{
         header::{HeaderValue, COOKIE, SET_COOKIE},
@@ -19,14 +18,15 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use futures::future::BoxFuture;
 use rand::rngs::StdRng;
-use rand::{SeedableRng};
+use rand::SeedableRng;
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tower::{Layer, Service};
+use typed_session::{SessionCookieCommand, SessionStore, SessionStoreImplementation};
 
 /// A type alias which provides a handle to the underlying session.
 ///
-/// This is provided via [`http::Extensions`](axum::http::Extensions). Most
+/// This is provided via [`http::Extensions`](http::Extensions). Most
 /// applications will use the
 /// [`ReadableSession`](crate::extractors::ReadableSession) and
 /// [`WritableSession`](crate::extractors::WritableSession) extractors rather
@@ -36,9 +36,10 @@ use tower::{Layer, Service};
 pub type SessionHandle<Data> = Arc<RwLock<typed_session::Session<Data>>>;
 
 /// Layer that provides cookie-based sessions.
-#[derive(Clone, Debug)]
-pub struct SessionLayer<Data, Implementation, const COOKIE_LENGTH: usize = 64> {
-    store: SessionStore<Data, Implementation, COOKIE_LENGTH>,
+#[derive(Debug)]
+pub struct SessionLayer<Data, Implementation> {
+    store: SessionStore<Data, Implementation, 64>,
+    rng: StdRng,
     cookie_path: String,
     cookie_name: String,
     cookie_domain: Option<String>,
@@ -48,7 +49,26 @@ pub struct SessionLayer<Data, Implementation, const COOKIE_LENGTH: usize = 64> {
     secure: bool,
 }
 
-impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH: usize> SessionLayer<Data, Implementation, COOKIE_LENGTH> {
+impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            // Reseed rng to prevent multiple threads generating the same random numbers.
+            rng: StdRng::from_entropy(),
+            cookie_path: self.cookie_path.clone(),
+            cookie_name: self.cookie_name.clone(),
+            cookie_domain: self.cookie_domain.clone(),
+            session_ttl: self.session_ttl.clone(),
+            min_session_renew_time: self.min_session_renew_time.clone(),
+            same_site_policy: self.same_site_policy.clone(),
+            secure: self.secure.clone(),
+        }
+    }
+}
+
+impl<Data, Implementation: SessionStoreImplementation<Data>>
+    SessionLayer<Data, Implementation>
+{
     /// Creates a layer which will attach a [`SessionHandle`] to requests via an
     /// extension. This session is derived from a cryptographically signed
     /// cookie. When the client sends a valid, known cookie then the session is
@@ -68,26 +88,26 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
     /// of your application:
     ///
     /// ```rust
-    /// # use typed_session_axum::{PersistencePolicy, SessionLayer, typed_session::MemoryStore, SameSite};
+    /// # use typed_session_axum::{SessionLayer, typed_session::MemoryStore};
     /// # use std::time::Duration;
+    /// # use axum_extra::extract::cookie::SameSite;
     /// SessionLayer::new(
-    ///     MemoryStore::new(),
-    ///     b"please do not hardcode your secret; instead use a
-    ///     cryptographically secure value",
+    ///     MemoryStore::<()>::new(),
     /// )
     /// .with_cookie_name("your.cookie.name")
     /// .with_cookie_path("/some/path")
     /// .with_cookie_domain("www.example.com")
+    /// .with_same_site_policy(SameSite::Strict)
     /// .with_session_ttl(Some(Duration::from_secs(60 * 5)))
-    /// .with_session_ttl(Some(Duration::from_secs(60 * 5)))
-    /// .with_persistence_policy(PersistencePolicy::Always)
+    /// .with_min_session_renew_time(Some(Duration::from_secs(60 * 5)))
     /// .with_secure(true);
     /// ```
     pub fn new(store: Implementation) -> Self {
         Self {
             store: SessionStore::new(store),
+            rng: StdRng::from_entropy(),
             cookie_path: "/".into(),
-            cookie_name: "axum.sid".into(),
+            cookie_name: "id".into(),
             cookie_domain: None,
             same_site_policy: SameSite::Strict,
             session_ttl: Some(Duration::from_secs(24 * 60 * 60)),
@@ -113,14 +133,6 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
         self.cookie_domain = Some(cookie_domain.as_ref().to_owned());
         self
     }
-
-    /*/// Decide if session is presented to the storage layer.
-    fn should_store(&self, cookie_value: &Option<String>, session_data_changed: bool) -> bool {
-        session_data_changed
-            || matches!(self.persistence_policy, PersistencePolicy::Always)
-            || (matches!(self.persistence_policy, PersistencePolicy::ExistingOnly)
-            && cookie_value.is_some())
-    }*/
 
     /// Sets a cookie same site policy for the session. Defaults to
     /// `SameSite::Strict`.
@@ -179,7 +191,7 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
         } else {
             cookie
         }
-            .finish();
+        .finish();
 
         cookie.make_removal();
 
@@ -187,46 +199,58 @@ impl<Data, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH
     }
 }
 
-impl<Data: Default + Debug, Implementation: SessionStoreImplementation<Data>, const COOKIE_LENGTH: usize> SessionLayer<Data, Implementation, COOKIE_LENGTH> {
-    async fn load_or_create(&self, cookie_value: Option<impl AsRef<str>>) -> SessionHandle<Data> {
-        let session = match cookie_value {
-            Some(cookie_value) => self.store.load_session(cookie_value).await.ok().flatten(),
-            None => None,
-        };
+async fn load_or_create<
+    Data: Default + Debug,
+    Implementation: SessionStoreImplementation<Data>,
+    const COOKIE_LENGTH: usize,
+>(
+    store: &SessionStore<Data, Implementation, COOKIE_LENGTH>,
+    cookie_value: Option<impl AsRef<str>>,
+) -> SessionHandle<Data> {
+    let session = match cookie_value {
+        Some(cookie_value) => store.load_session(cookie_value).await.ok().flatten(),
+        None => None,
+    };
 
-        Arc::new(RwLock::new(
-            session
-                .unwrap_or_default(),
-        ))
-    }
+    Arc::new(RwLock::new(session.unwrap_or_default()))
 }
 
-impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clone> Layer<Inner> for SessionLayer<Data, Implementation> {
+impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clone> Layer<Inner>
+    for SessionLayer<Data, Implementation>
+{
     type Service = Session<Inner, Data, Implementation>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
+        let mut layer = self.clone();
+        // Reseed rng to prevent multiple threads creating the same random values.
+        layer.rng = StdRng::from_entropy();
+
         Session {
             inner,
-            layer: self.clone(),
-            rng: StdRng::from_entropy(),
+            layer: Arc::new(Mutex::new(layer)),
         }
     }
 }
 
 /// Session service container.
-pub struct Session<Inner, Data, Implementation: SessionStoreImplementation<Data>> {
+#[derive(Debug)]
+pub struct Session<Inner, Data, Implementation> {
     inner: Inner,
-    layer: SessionLayer<Data, Implementation>,
-    rng: StdRng,
+    layer: Arc<Mutex<SessionLayer<Data, Implementation>>>,
 }
 
-impl<Inner, ReqBody, ResBody, Data: Clone + Default + Debug + Send + Sync, Implementation: SessionStoreImplementation<Data> + Clone + Send + Sync> Service<Request<ReqBody>>
-for Session<Inner, Data, Implementation>
-    where
-        Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
-        ResBody: Send + 'static,
-        ReqBody: Send + 'static,
-        Inner::Future: Send + 'static,
+impl<
+        Inner,
+        ReqBody,
+        ResBody,
+        Data: Clone + Default + Debug + Send + Sync + 'static,
+        Implementation: SessionStoreImplementation<Data> + Clone + Send + Sync + 'static,
+    > Service<Request<ReqBody>> for Session<Inner, Data, Implementation>
+where
+    Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
+    ResBody: Send + 'static,
+    ReqBody: Send + 'static,
+    Inner::Future: Send + 'static,
 {
     type Response = Inner::Response;
     type Error = Inner::Error;
@@ -237,28 +261,32 @@ for Session<Inner, Data, Implementation>
     }
 
     fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
-        let session_layer = &mut self.layer;
-
-        // Multiple cookies may be all concatenated into a single Cookie header
-        // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
-        // Cookie headers (HTTP/2 behaviour). Search for the session cookie from
-        // all Cookie headers, assuming both forms are possible.
-        let cookie_value = request
-            .headers()
-            .get_all(COOKIE)
-            .iter()
-            .filter_map(|cookie_header| cookie_header.to_str().ok())
-            .flat_map(|cookie_header| cookie_header.split(';'))
-            .filter_map(|cookie_header| Cookie::parse_encoded(cookie_header.trim()).ok())
-            .filter(|cookie| cookie.name() == session_layer.cookie_name)
-            .map(|cookie| cookie.value().to_owned())
-            .next();
+        let session_layer = self.layer.clone();
 
         let inner = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
-        Box::pin(async move {
-            let session_handle = session_layer.load_or_create(cookie_value).await;
 
+        Box::pin(async move {
+            let session_layer = &mut *session_layer.lock().await;
+
+            // Multiple cookies may be all concatenated into a single Cookie header
+            // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
+            // Cookie headers (HTTP/2 behaviour). Search for the session cookie from
+            // all Cookie headers, assuming both forms are possible.
+            let cookie_value = request
+                .headers()
+                .get_all(COOKIE)
+                .iter()
+                .filter_map(|cookie_header| cookie_header.to_str().ok())
+                .flat_map(|cookie_header| cookie_header.split(';'))
+                .filter_map(|cookie_header| Cookie::parse_encoded(cookie_header.trim()).ok())
+                .filter(|cookie| cookie.name() == session_layer.cookie_name)
+                .map(|cookie| cookie.value().to_owned())
+                .next();
+
+            let session_handle = load_or_create(&session_layer.store, cookie_value).await;
+
+            // TODO update session expiry only after min update time
             let mut session = session_handle.write().await;
             if let Some(ttl) = session_layer.session_ttl {
                 (*session).expire_in(ttl);
@@ -271,16 +299,27 @@ for Session<Inner, Data, Implementation>
             let session = RwLock::into_inner(
                 Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
             );
-            match session_layer.store.store_session(session, &mut self.rng).await {
-                Ok(SessionCookieCommand::DoNothing) => {},
-                Ok(SessionCookieCommand::Set {cookie_value, expiry}) => {
+
+            let store = &mut session_layer.store;
+            let rng = &mut session_layer.rng;
+            match store.store_session(session, rng).await {
+                Ok(SessionCookieCommand::DoNothing) => {}
+                Ok(SessionCookieCommand::Set {
+                    cookie_value,
+                    expiry,
+                }) => {
                     let mut cookie = session_layer.build_cookie(cookie_value);
                     if let Some(expiry) = expiry {
-                        cookie.set_expires(Some(OffsetDateTime::from_unix_timestamp(expiry.timestamp()).unwrap()));
+                        cookie.set_expires(Some(
+                            OffsetDateTime::from_unix_timestamp(expiry.timestamp()).unwrap(),
+                        ));
                     }
 
-                    response.headers_mut().append(SET_COOKIE, HeaderValue::from_str(&cookie.to_string()).unwrap());
-                },
+                    response.headers_mut().append(
+                        SET_COOKIE,
+                        HeaderValue::from_str(&cookie.to_string()).unwrap(),
+                    );
+                }
                 Ok(SessionCookieCommand::Delete) => {
                     let removal_cookie = session_layer.build_removal_cookie();
 
@@ -288,7 +327,7 @@ for Session<Inner, Data, Implementation>
                         SET_COOKIE,
                         HeaderValue::from_str(&removal_cookie.to_string()).unwrap(),
                     );
-                },
+                }
                 Err(error) => {
                     tracing::error!("Failed to store session: {error:?}");
                     *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
@@ -300,18 +339,29 @@ for Session<Inner, Data, Implementation>
     }
 }
 
+impl<Inner: Clone, Data, Implementation> Clone for Session<Inner, Data, Implementation> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            layer: self.layer.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use axum::http::{Request, Response};
+    use axum_extra::extract::cookie::Cookie;
     use http::{
         header::{COOKIE, SET_COOKIE},
         HeaderValue, StatusCode,
     };
     use hyper::Body;
-    use rand::Rng;
+    use serde::{Deserialize, Serialize};
     use tower::{BoxError, Service, ServiceBuilder, ServiceExt};
 
-    use crate::{async_session::MemoryStore, SessionHandle, SessionLayer};
+    use crate::{typed_session::MemoryStore, SessionHandle, SessionLayer};
 
     #[derive(Deserialize, Serialize, PartialEq, Debug)]
     struct Counter {
@@ -325,9 +375,8 @@ mod tests {
 
     #[tokio::test]
     async fn sets_session_cookie() {
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer = SessionLayer::new(store, &secret);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
         let request = Request::get("/").body(Body::empty()).unwrap();
@@ -346,9 +395,8 @@ mod tests {
 
     #[tokio::test]
     async fn uses_valid_session() {
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer = SessionLayer::new(store, &secret);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
             .service_fn(increment);
@@ -378,9 +426,8 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_cookies_in_single_header() {
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer = SessionLayer::new(store, &secret);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
             .service_fn(increment);
@@ -414,9 +461,8 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_cookie_headers() {
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer = SessionLayer::new(store, &secret);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
             .service_fn(increment);
@@ -446,10 +492,8 @@ mod tests {
 
     #[tokio::test]
     async fn no_cookie_stored_when_no_session_is_required() {
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer = SessionLayer::new(store, &secret)
-            .with_persistence_policy(PersistencePolicy::ChangedOnly);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
         let request = Request::get("/").body(Body::empty()).unwrap();
@@ -461,15 +505,12 @@ mod tests {
     }
 
     async fn invalid_session_check_cookie_result(
-        persistence_policy: PersistencePolicy,
         change_data: bool,
         expect_cookie_header: (ExpectedResult, ExpectedResult),
     ) {
         let (expect_cookie_header_first, expect_cookie_header_second) = expect_cookie_header;
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer =
-            SessionLayer::new(store, &secret).with_persistence_policy(persistence_policy);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(&session_layer)
             .service_fn(echo_read_session);
@@ -519,49 +560,32 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_session_always_sets_guest_cookie() {
-        invalid_session_check_cookie_result(
-            PersistencePolicy::Always,
-            false,
-            (ExpectedResult::Some, ExpectedResult::Some),
-        )
+        invalid_session_check_cookie_result(false, (ExpectedResult::Some, ExpectedResult::Some))
             .await;
     }
 
     #[tokio::test]
     async fn invalid_session_sets_new_session_cookie_when_data_changes() {
-        invalid_session_check_cookie_result(
-            PersistencePolicy::ExistingOnly,
-            true,
-            (ExpectedResult::None, ExpectedResult::Some),
-        )
+        invalid_session_check_cookie_result(true, (ExpectedResult::None, ExpectedResult::Some))
             .await;
     }
 
     #[tokio::test]
     async fn invalid_session_sets_no_cookie_when_no_data_changes() {
-        invalid_session_check_cookie_result(
-            PersistencePolicy::ExistingOnly,
-            false,
-            (ExpectedResult::None, ExpectedResult::None),
-        )
+        invalid_session_check_cookie_result(false, (ExpectedResult::None, ExpectedResult::None))
             .await;
     }
 
     #[tokio::test]
-    async fn invalid_session_changedonly_sets_cookie_when_changed() {
-        invalid_session_check_cookie_result(
-            PersistencePolicy::ChangedOnly,
-            true,
-            (ExpectedResult::None, ExpectedResult::Some),
-        )
+    async fn invalid_session_changed_only_sets_cookie_when_changed() {
+        invalid_session_check_cookie_result(true, (ExpectedResult::None, ExpectedResult::Some))
             .await;
     }
 
     #[tokio::test]
     async fn destroyed_sessions_sets_removal_cookie() {
-        let secret = rand::thread_rng().gen::<[u8; 64]>();
-        let store = MemoryStore::new();
-        let session_layer = SessionLayer::new(store, &secret);
+        let store = MemoryStore::<()>::new();
+        let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
             .service_fn(destroy);
@@ -584,21 +608,13 @@ mod tests {
             .insert(COOKIE, session_cookie.parse().unwrap());
         let res = service.ready().await.unwrap().call(request).await.unwrap();
         assert_eq!(
-            res.headers()
+            Cookie::from_str(res.headers()
                 .get(SET_COOKIE)
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .len(),
-            121
+                .unwrap()).unwrap().value(),
+            ""
         );
-    }
-
-    #[test]
-    #[should_panic]
-    fn too_short_secret() {
-        let store = MemoryStore::new();
-        SessionLayer::new(store, b"");
     }
 
     async fn echo(req: Request<Body>) -> Result<Response<Body>, BoxError> {
@@ -607,18 +623,18 @@ mod tests {
 
     async fn echo_read_session(req: Request<Body>) -> Result<Response<Body>, BoxError> {
         {
-            let session_handle = req.extensions().get::<SessionHandle>().unwrap();
+            let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let session = session_handle.write().await;
-            let _ = session.get::<String>("signed_in").unwrap_or_default();
+            let _ = session.data();
         }
         Ok(Response::new(req.into_body()))
     }
 
     async fn echo_with_session_change(req: Request<Body>) -> Result<Response<Body>, BoxError> {
         {
-            let session_handle = req.extensions().get::<SessionHandle>().unwrap();
+            let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let mut session = session_handle.write().await;
-            session.insert("signed_in", true).unwrap();
+            session.data_mut();
         }
         Ok(Response::new(req.into_body()))
     }
@@ -626,25 +642,22 @@ mod tests {
     async fn destroy(req: Request<Body>) -> Result<Response<Body>, BoxError> {
         // Destroy the session if we received a session cookie.
         if req.headers().get(COOKIE).is_some() {
-            let session_handle = req.extensions().get::<SessionHandle>().unwrap();
+            let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let mut session = session_handle.write().await;
-            session.destroy();
+            session.delete();
         }
 
         Ok(Response::new(req.into_body()))
     }
 
     async fn increment(mut req: Request<Body>) -> Result<Response<Body>, BoxError> {
-        let mut counter = 0;
+        let counter;
 
         {
-            let session_handle = req.extensions().get::<SessionHandle>().unwrap();
+            let session_handle = req.extensions().get::<SessionHandle<i32>>().unwrap();
             let mut session = session_handle.write().await;
-            counter = session
-                .get("counter")
-                .map(|count: i32| count + 1)
-                .unwrap_or(counter);
-            session.insert("counter", counter).unwrap();
+            *session.data_mut() += 1;
+            counter = *session.data();
         }
 
         let body = serde_json::to_string(&Counter { counter }).unwrap();

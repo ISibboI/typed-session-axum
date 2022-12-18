@@ -1,11 +1,11 @@
 //! Extractors for sessions.
 
-use std::ops::{Deref, DerefMut};
 use async_trait::async_trait;
+use std::ops::{Deref, DerefMut};
 
+use crate::session::SessionHandle;
 use axum::{extract::FromRequestParts, http::request::Parts, Extension};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
-use crate::session::SessionHandle;
 
 // use crate::SessionHandle;
 
@@ -26,8 +26,8 @@ impl<Data> Deref for ReadableSession<Data> {
 
 #[async_trait]
 impl<S, Data: Send + Sync + 'static> FromRequestParts<S> for ReadableSession<Data>
-    where
-        S: Send + Sync,
+where
+    S: Send + Sync,
 {
     type Rejection = std::convert::Infallible;
 
@@ -65,8 +65,8 @@ impl<Data> DerefMut for WritableSession<Data> {
 
 #[async_trait]
 impl<S, Data: Send + Sync + 'static> FromRequestParts<S> for WritableSession<Data>
-    where
-        S: Send + Sync,
+where
+    S: Send + Sync,
 {
     type Rejection = std::convert::Infallible;
 

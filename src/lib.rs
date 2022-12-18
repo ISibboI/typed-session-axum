@@ -6,8 +6,8 @@
 //! when they are not found or are otherwise invalid. When a valid, known cookie
 //! is received in a request, the session is retrieved using this cookie. The
 //! middleware provides sessions via [`SessionHandle`]. Handlers use the
-//! [`ReadableSession`](crate::extractors::ReadableSession) and
-//! [`WritableSession`](crate::extractors::WritableSession) extractors to read
+//! [`ReadableSession`](ReadableSession) and
+//! [`WritableSession`](WritableSession) extractors to read
 //! from and write to sessions respectively.
 //!
 //! # Example
@@ -16,20 +16,17 @@
 //!
 //! ```rust,no_run
 //! use axum::{routing::get, Router};
-//! use axum_sessions::{
-//!     async_session::MemoryStore, extractors::WritableSession, PersistencePolicy, SessionLayer,
+//! use typed_session_axum::{
+//!     typed_session::MemoryStore, WritableSession, SessionLayer,
 //! };
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let store = async_session::MemoryStore::new();
-//!     let secret = b"..."; // MUST be at least 64 bytes!
-//!     let session_layer = SessionLayer::new(store, secret);
+//!     let store = MemoryStore::<i32>::new();
+//!     let session_layer = SessionLayer::new(store);
 //!
-//!     async fn handler(mut session: WritableSession) {
-//!         session
-//!             .insert("foo", 42)
-//!             .expect("Could not store the answer.");
+//!     async fn handler(mut session: WritableSession<i32>) {
+//!         *session.data_mut() = 42;
 //!     }
 //!
 //!     let app = Router::new().route("/", get(handler)).layer(session_layer);
@@ -48,14 +45,14 @@
 //! use std::convert::Infallible;
 //!
 //! use axum::http::header::SET_COOKIE;
-//! use axum_sessions::{SessionHandle, SessionLayer};
+//! use typed_session_axum::{typed_session::MemoryStore, SessionHandle, SessionLayer};
 //! use http::{Request, Response};
 //! use hyper::Body;
 //! use rand::Rng;
 //! use tower::{Service, ServiceBuilder, ServiceExt};
 //!
 //! async fn handle(request: Request<Body>) -> Result<Response<Body>, Infallible> {
-//!     let session_handle = request.extensions().get::<SessionHandle>().unwrap();
+//!     let session_handle = request.extensions().get::<SessionHandle<()>>().unwrap();
 //!     let session = session_handle.read().await;
 //!     // Use the session as you'd like.
 //!
@@ -64,9 +61,8 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = async_session::MemoryStore::new();
-//! let secret = rand::thread_rng().gen::<[u8; 128]>();
-//! let session_layer = SessionLayer::new(store, &secret);
+//! let store = MemoryStore::<()>::new();
+//! let session_layer = SessionLayer::new(store);
 //!
 //! let mut service = ServiceBuilder::new()
 //!     .layer(session_layer)
@@ -85,24 +81,26 @@
 //!         .unwrap()
 //!         .split("=")
 //!         .collect::<Vec<_>>()[0],
-//!     "axum.sid"
+//!     "id"
 //! );
 //!
 //! # Ok(())
 //! # }
 //! ```
 
-
 #![forbid(unsafe_code)]
 #![deny(
-future_incompatible,
-missing_debug_implementations,
-nonstandard_style,
-missing_docs,
-unreachable_pub,
-missing_copy_implementations,
-unused_qualifications
+    future_incompatible,
+    missing_debug_implementations,
+    nonstandard_style,
+    missing_docs,
+    unreachable_pub,
+    missing_copy_implementations,
+    unused_qualifications
 )]
+
+pub use extractors::{ReadableSession, WritableSession};
+pub use session::{SessionHandle, SessionLayer};
 
 mod extractors;
 mod session;
