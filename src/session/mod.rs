@@ -511,7 +511,7 @@ mod tests {
         expect_cookie_header: (ExpectedResult, ExpectedResult),
     ) {
         let (expect_cookie_header_first, expect_cookie_header_second) = expect_cookie_header;
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new_with_logger();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(&session_layer)
