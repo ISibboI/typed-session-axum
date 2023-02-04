@@ -16,13 +16,12 @@ use axum::{
     response::Response,
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
+use chrono::Utc;
 use futures::future::BoxFuture;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
 use time::OffsetDateTime;
 use tokio::sync::{Mutex, RwLock};
 use tower::{Layer, Service};
-use typed_session::{SessionCookieCommand, SessionStore, SessionStoreImplementation};
+use typed_session::{SessionCookieCommand, SessionExpiry, SessionRenewalStrategy, SessionStore, SessionStoreImplementation};
 
 /// A type alias which provides a handle to the underlying session.
 ///
@@ -39,7 +38,6 @@ pub type SessionHandle<Data> = Arc<RwLock<typed_session::Session<Data>>>;
 #[derive(Debug)]
 pub struct SessionLayer<Data, Implementation> {
     store: SessionStore<Data, Implementation, 64>,
-    rng: StdRng,
     cookie_path: String,
     cookie_name: String,
     cookie_domain: Option<String>,
@@ -53,8 +51,6 @@ impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
-            // Reseed rng to prevent multiple threads generating the same random numbers.
-            rng: StdRng::from_entropy(),
             cookie_path: self.cookie_path.clone(),
             cookie_name: self.cookie_name.clone(),
             cookie_domain: self.cookie_domain.clone(),
@@ -104,8 +100,7 @@ impl<Data, Implementation: SessionStoreImplementation<Data>>
     /// ```
     pub fn new(store: Implementation) -> Self {
         Self {
-            store: SessionStore::new(store),
-            rng: StdRng::from_entropy(),
+            store: SessionStore::new(store, SessionRenewalStrategy::AutomaticRenewal { time_to_live: chrono::Duration::seconds(24*60*60), maximum_remaining_time_to_live_for_renewal: chrono::Duration::seconds(20*60*60) }),
             cookie_path: "/".into(),
             cookie_name: "id".into(),
             cookie_domain: None,
@@ -221,9 +216,7 @@ impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clon
     type Service = Session<Inner, Data, Implementation>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
-        let mut layer = self.clone();
-        // Reseed rng to prevent multiple threads creating the same random values.
-        layer.rng = StdRng::from_entropy();
+        let layer = self.clone();
 
         Session {
             inner,
@@ -267,6 +260,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, inner);
 
         Box::pin(async move {
+            let now = Utc::now();
             let session_layer = &mut *session_layer.lock().await;
 
             // Multiple cookies may be all concatenated into a single Cookie header
@@ -289,7 +283,7 @@ where
             // TODO update session expiry only after min update time
             let mut session = session_handle.write().await;
             if let Some(ttl) = session_layer.session_ttl {
-                (*session).expire_in(ttl);
+                (*session).expire_in(now, ttl);
             }
             drop(session);
 
@@ -301,15 +295,14 @@ where
             );
 
             let store = &mut session_layer.store;
-            let rng = &mut session_layer.rng;
-            match store.store_session(session, rng).await {
+            match store.store_session(session).await {
                 Ok(SessionCookieCommand::DoNothing) => {}
                 Ok(SessionCookieCommand::Set {
                     cookie_value,
                     expiry,
                 }) => {
                     let mut cookie = session_layer.build_cookie(cookie_value);
-                    if let Some(expiry) = expiry {
+                    if let SessionExpiry::DateTime(expiry) = expiry {
                         cookie.set_expires(Some(
                             OffsetDateTime::from_unix_timestamp(expiry.timestamp()).unwrap(),
                         ));
