@@ -57,10 +57,10 @@ impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
             cookie_path: self.cookie_path.clone(),
             cookie_name: self.cookie_name.clone(),
             cookie_domain: self.cookie_domain.clone(),
-            session_ttl: self.session_ttl.clone(),
-            min_session_renew_time: self.min_session_renew_time.clone(),
-            same_site_policy: self.same_site_policy.clone(),
-            secure: self.secure.clone(),
+            session_ttl: self.session_ttl,
+            min_session_renew_time: self.min_session_renew_time,
+            same_site_policy: self.same_site_policy,
+            secure: self.secure,
         }
     }
 }
