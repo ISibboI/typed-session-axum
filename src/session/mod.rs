@@ -21,7 +21,10 @@ use futures::future::BoxFuture;
 use time::OffsetDateTime;
 use tokio::sync::{Mutex, RwLock};
 use tower::{Layer, Service};
-use typed_session::{SessionCookieCommand, SessionExpiry, SessionRenewalStrategy, SessionStore, SessionStoreImplementation};
+use typed_session::{
+    SessionCookieCommand, SessionExpiry, SessionRenewalStrategy, SessionStore,
+    SessionStoreImplementation,
+};
 
 /// A type alias which provides a handle to the underlying session.
 ///
@@ -62,9 +65,7 @@ impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
     }
 }
 
-impl<Data, Implementation: SessionStoreImplementation<Data>>
-    SessionLayer<Data, Implementation>
-{
+impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, Implementation> {
     /// Creates a layer which will attach a [`SessionHandle`] to requests via an
     /// extension. This session is derived from a cryptographically signed
     /// cookie. When the client sends a valid, known cookie then the session is
@@ -100,7 +101,15 @@ impl<Data, Implementation: SessionStoreImplementation<Data>>
     /// ```
     pub fn new(store: Implementation) -> Self {
         Self {
-            store: SessionStore::new(store, SessionRenewalStrategy::AutomaticRenewal { time_to_live: chrono::Duration::seconds(24*60*60), maximum_remaining_time_to_live_for_renewal: chrono::Duration::seconds(20*60*60) }),
+            store: SessionStore::new(
+                store,
+                SessionRenewalStrategy::AutomaticRenewal {
+                    time_to_live: chrono::Duration::seconds(24 * 60 * 60),
+                    maximum_remaining_time_to_live_for_renewal: chrono::Duration::seconds(
+                        20 * 60 * 60,
+                    ),
+                },
+            ),
             cookie_path: "/".into(),
             cookie_name: "id".into(),
             cookie_domain: None,
@@ -343,7 +352,6 @@ impl<Inner: Clone, Data, Implementation> Clone for Session<Inner, Data, Implemen
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use axum::http::{Request, Response};
     use axum_extra::extract::cookie::Cookie;
     use http::{
@@ -352,6 +360,7 @@ mod tests {
     };
     use hyper::Body;
     use serde::{Deserialize, Serialize};
+    use std::str::FromStr;
     use tower::{BoxError, Service, ServiceBuilder, ServiceExt};
 
     use crate::{typed_session::MemoryStore, SessionHandle, SessionLayer};
@@ -601,11 +610,9 @@ mod tests {
             .insert(COOKIE, session_cookie.parse().unwrap());
         let res = service.ready().await.unwrap().call(request).await.unwrap();
         assert_eq!(
-            Cookie::from_str(res.headers()
-                .get(SET_COOKIE)
+            Cookie::from_str(res.headers().get(SET_COOKIE).unwrap().to_str().unwrap())
                 .unwrap()
-                .to_str()
-                .unwrap()).unwrap().value(),
+                .value(),
             ""
         );
     }
