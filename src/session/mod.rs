@@ -40,6 +40,11 @@ pub type SessionHandle<Data> = Arc<RwLock<typed_session::Session<Data>>>;
 /// Layer that provides cookie-based sessions.
 #[derive(Debug)]
 pub struct SessionLayer<Data, Implementation> {
+    session_layer: Arc<Mutex<SessionLayerData<Data, Implementation>>>,
+}
+
+#[derive(Debug)]
+pub struct SessionLayerData<Data, Implementation> {
     store: SessionStore<Data, Implementation, 64>,
     cookie_path: String,
     cookie_name: String,
@@ -50,7 +55,25 @@ pub struct SessionLayer<Data, Implementation> {
     secure: bool,
 }
 
-impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
+impl<Data, Implementation> Clone for SessionLayer<Data, Implementation> {
+    fn clone(&self) -> Self {
+        Self {
+            session_layer: self.session_layer.clone(),
+        }
+    }
+}
+
+impl<Data, Implementation> From<SessionLayerData<Data, Implementation>>
+    for SessionLayer<Data, Implementation>
+{
+    fn from(session_layer: SessionLayerData<Data, Implementation>) -> Self {
+        Self {
+            session_layer: Arc::new(Mutex::new(session_layer)),
+        }
+    }
+}
+
+/*impl<Data, Implementation: Clone> Clone for SessionLayerData<Data, Implementation> {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
@@ -63,7 +86,7 @@ impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
             secure: self.secure,
         }
     }
-}
+}*/
 
 impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, Implementation> {
     /// Creates a layer which will attach a [`SessionHandle`] to requests via an
@@ -89,7 +112,7 @@ impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, 
     /// # use std::time::Duration;
     /// # use axum_extra::extract::cookie::SameSite;
     /// SessionLayer::new(
-    ///     MemoryStore::<()>::new(),
+    ///     MemoryStore::<(), _>::new(),
     /// )
     /// .with_cookie_name("your.cookie.name")
     /// .with_cookie_path("/some/path")
@@ -100,7 +123,7 @@ impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, 
     /// .with_secure(true);
     /// ```
     pub fn new(store: Implementation) -> Self {
-        Self {
+        SessionLayerData {
             store: SessionStore::new(
                 store,
                 SessionRenewalStrategy::AutomaticRenewal {
@@ -118,54 +141,70 @@ impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, 
             min_session_renew_time: None,
             secure: true,
         }
+        .into()
     }
+}
 
+impl<Data: Debug, Implementation: SessionStoreImplementation<Data> + Debug>
+    SessionLayer<Data, Implementation>
+{
     /// Sets a cookie path for the session. Defaults to `"/"`.
-    pub fn with_cookie_path(mut self, cookie_path: impl AsRef<str>) -> Self {
-        self.cookie_path = cookie_path.as_ref().to_owned();
-        self
+    pub fn with_cookie_path(self, cookie_path: impl AsRef<str>) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.cookie_path = cookie_path.as_ref().to_owned();
+        session_layer.into()
     }
 
     /// Sets a cookie name for the session. Defaults to `"axum.sid"`.
-    pub fn with_cookie_name(mut self, cookie_name: impl AsRef<str>) -> Self {
-        self.cookie_name = cookie_name.as_ref().to_owned();
-        self
+    pub fn with_cookie_name(self, cookie_name: impl AsRef<str>) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.cookie_name = cookie_name.as_ref().to_owned();
+        session_layer.into()
     }
 
     /// Sets a cookie domain for the session. Defaults to `None`.
-    pub fn with_cookie_domain(mut self, cookie_domain: impl AsRef<str>) -> Self {
-        self.cookie_domain = Some(cookie_domain.as_ref().to_owned());
-        self
+    pub fn with_cookie_domain(self, cookie_domain: impl AsRef<str>) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.cookie_domain = Some(cookie_domain.as_ref().to_owned());
+        session_layer.into()
     }
 
     /// Sets a cookie same site policy for the session. Defaults to
     /// `SameSite::Strict`.
-    pub fn with_same_site_policy(mut self, policy: SameSite) -> Self {
-        self.same_site_policy = policy;
-        self
+    pub fn with_same_site_policy(self, policy: SameSite) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.same_site_policy = policy;
+        session_layer.into()
     }
 
     /// Sets a cookie time-to-live (ttl) for the session. Defaults to
-    /// `Duration::from_secs(60 * 60 24)`; one day.
-    pub fn with_session_ttl(mut self, session_ttl: Option<Duration>) -> Self {
-        self.session_ttl = session_ttl;
-        self
+    /// `Duration::from_secs(60 * 60 * 24)`; one day.
+    pub fn with_session_ttl(self, session_ttl: Option<Duration>) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.session_ttl = session_ttl;
+        session_layer.into()
     }
 
     /// Sets the minimum time to wait between renewing the session.
     /// Renewing means changing the session key, and in turn updating the ttl.
     /// Defaults to `None`.
-    pub fn with_min_session_renew_time(mut self, min_session_renew_time: Option<Duration>) -> Self {
-        self.min_session_renew_time = min_session_renew_time;
-        self
+    pub fn with_min_session_renew_time(self, min_session_renew_time: Option<Duration>) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.min_session_renew_time = min_session_renew_time;
+        session_layer.into()
     }
 
     /// Sets a cookie secure attribute for the session. Defaults to `true`.
-    pub fn with_secure(mut self, secure: bool) -> Self {
-        self.secure = secure;
-        self
+    pub fn with_secure(self, secure: bool) -> Self {
+        let mut session_layer = Arc::try_unwrap(self.session_layer).unwrap().into_inner();
+        session_layer.secure = secure;
+        session_layer.into()
     }
+}
 
+impl<Data, Implementation: SessionStoreImplementation<Data>>
+    SessionLayerData<Data, Implementation>
+{
     fn build_cookie(&self, cookie_value: String) -> Cookie<'static> {
         let mut cookie = Cookie::build(self.cookie_name.clone(), cookie_value)
             .http_only(true)
@@ -219,35 +258,32 @@ async fn load_or_create<
     Arc::new(RwLock::new(session.unwrap_or_default()))
 }
 
-impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clone> Layer<Inner>
+impl<Inner, Data, Implementation: SessionStoreImplementation<Data>> Layer<Inner>
     for SessionLayer<Data, Implementation>
 {
-    type Service = Session<Inner, Data, Implementation>;
+    type Service = SessionService<Inner, Data, Implementation>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
         let layer = self.clone();
 
-        Session {
-            inner,
-            layer: Arc::new(Mutex::new(layer)),
-        }
+        SessionService { inner, layer }
     }
 }
 
 /// Session service container.
 #[derive(Debug)]
-pub struct Session<Inner, Data, Implementation> {
+pub struct SessionService<Inner, Data, Implementation> {
     inner: Inner,
-    layer: Arc<Mutex<SessionLayer<Data, Implementation>>>,
+    layer: SessionLayer<Data, Implementation>,
 }
 
 impl<
         Inner,
         ReqBody,
         ResBody,
-        Data: Clone + Default + Debug + Send + Sync + 'static,
-        Implementation: SessionStoreImplementation<Data> + Clone + Send + Sync + 'static,
-    > Service<Request<ReqBody>> for Session<Inner, Data, Implementation>
+        Data: Default + Debug + Send + Sync + 'static,
+        Implementation: SessionStoreImplementation<Data> + Send + Sync + 'static,
+    > Service<Request<ReqBody>> for SessionService<Inner, Data, Implementation>
 where
     Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
     ResBody: Send + 'static,
@@ -270,7 +306,7 @@ where
 
         Box::pin(async move {
             let now = Utc::now();
-            let session_layer = &mut *session_layer.lock().await;
+            let session_layer = &mut *session_layer.session_layer.lock().await;
 
             // Multiple cookies may be all concatenated into a single Cookie header
             // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
@@ -341,7 +377,7 @@ where
     }
 }
 
-impl<Inner: Clone, Data, Implementation> Clone for Session<Inner, Data, Implementation> {
+impl<Inner: Clone, Data, Implementation> Clone for SessionService<Inner, Data, Implementation> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -377,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn sets_session_cookie() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
@@ -397,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn uses_valid_session() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -428,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_cookies_in_single_header() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -463,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_cookie_headers() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -494,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_cookie_stored_when_no_session_is_required() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
@@ -586,7 +622,7 @@ mod tests {
 
     #[tokio::test]
     async fn destroyed_sessions_sets_removal_cookie() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
