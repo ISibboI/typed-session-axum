@@ -19,7 +19,7 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use chrono::Utc;
 use futures::future::BoxFuture;
 use time::OffsetDateTime;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tower::{Layer, Service};
 use typed_session::{
     SessionCookieCommand, SessionExpiry, SessionRenewalStrategy, SessionStore,
@@ -93,7 +93,7 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     /// # use std::time::Duration;
     /// # use axum_extra::extract::cookie::SameSite;
     /// SessionLayer::new(
-    ///     MemoryStore::<()>::new(),
+    ///     MemoryStore::<(), _>::new(),
     /// )
     /// .with_cookie_name("your.cookie.name")
     /// .with_cookie_path("/some/path")
@@ -232,11 +232,9 @@ impl<
     type Service = Session<Inner, SessionData, SessionStoreConnection>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
-        let layer = self.clone();
-
         Session {
             inner,
-            layer: Arc::new(Mutex::new(layer)),
+            layer: Arc::new(self.clone()),
         }
     }
 }
@@ -245,7 +243,7 @@ impl<
 #[derive(Debug)]
 pub struct Session<Inner, SessionData, SessionStoreConnection> {
     inner: Inner,
-    layer: Arc<Mutex<SessionLayer<SessionData, SessionStoreConnection>>>,
+    layer: Arc<SessionLayer<SessionData, SessionStoreConnection>>,
 }
 
 impl<
@@ -277,7 +275,6 @@ where
 
         Box::pin(async move {
             let now = Utc::now();
-            let session_layer = &mut *session_layer.lock().await;
 
             // Multiple cookies may be all concatenated into a single Cookie header
             // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
@@ -310,7 +307,7 @@ where
                 Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
             );
 
-            let store = &mut session_layer.store;
+            let store = &session_layer.store;
             match store.store_session(session).await {
                 Ok(SessionCookieCommand::DoNothing) => {}
                 Ok(SessionCookieCommand::Set {
@@ -348,7 +345,7 @@ where
     }
 }
 
-impl<Inner: Clone, SessionData, SessionStoreConnection> Clone
+impl<Inner: Clone, SessionData, SessionStoreConnection: Clone> Clone
     for Session<Inner, SessionData, SessionStoreConnection>
 {
     fn clone(&self) -> Self {
