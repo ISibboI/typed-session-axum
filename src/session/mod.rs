@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, RwLock};
 use tower::{Layer, Service};
 use typed_session::{
     SessionCookieCommand, SessionExpiry, SessionRenewalStrategy, SessionStore,
-    SessionStoreImplementation,
+    SessionStoreConnector,
 };
 
 /// A type alias which provides a handle to the underlying session.
@@ -35,12 +35,12 @@ use typed_session::{
 /// than using the handle directly. A notable exception is when using this
 /// library as a generic Tower middleware: such use cases will consume the
 /// handle directly.
-pub type SessionHandle<Data> = Arc<RwLock<typed_session::Session<Data>>>;
+pub type SessionHandle<SessionData> = Arc<RwLock<typed_session::Session<SessionData>>>;
 
 /// Layer that provides cookie-based sessions.
 #[derive(Debug)]
-pub struct SessionLayer<Data, Implementation> {
-    store: SessionStore<Data, Implementation, 64>,
+pub struct SessionLayer<SessionData, SessionStoreConnection> {
+    store: SessionStore<SessionData, SessionStoreConnection, 64>,
     cookie_path: String,
     cookie_name: String,
     cookie_domain: Option<String>,
@@ -50,7 +50,9 @@ pub struct SessionLayer<Data, Implementation> {
     secure: bool,
 }
 
-impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
+impl<SessionData, SessionStoreConnection: Clone> Clone
+    for SessionLayer<SessionData, SessionStoreConnection>
+{
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
@@ -65,7 +67,9 @@ impl<Data, Implementation: Clone> Clone for SessionLayer<Data, Implementation> {
     }
 }
 
-impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, Implementation> {
+impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
+    SessionLayer<SessionData, SessionStoreConnection>
+{
     /// Creates a layer which will attach a [`SessionHandle`] to requests via an
     /// extension. This session is derived from a cryptographically signed
     /// cookie. When the client sends a valid, known cookie then the session is
@@ -99,7 +103,7 @@ impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, 
     /// .with_min_session_renew_time(Some(Duration::from_secs(60 * 5)))
     /// .with_secure(true);
     /// ```
-    pub fn new(store: Implementation) -> Self {
+    pub fn new(store: SessionStoreConnection) -> Self {
         Self {
             store: SessionStore::new(
                 store,
@@ -204,13 +208,13 @@ impl<Data, Implementation: SessionStoreImplementation<Data>> SessionLayer<Data, 
 }
 
 async fn load_or_create<
-    Data: Default + Debug,
-    Implementation: SessionStoreImplementation<Data>,
+    SessionData: Default + Debug,
+    SessionStoreConnection: SessionStoreConnector<SessionData>,
     const COOKIE_LENGTH: usize,
 >(
-    store: &SessionStore<Data, Implementation, COOKIE_LENGTH>,
+    store: &SessionStore<SessionData, SessionStoreConnection, COOKIE_LENGTH>,
     cookie_value: Option<impl AsRef<str>>,
-) -> SessionHandle<Data> {
+) -> SessionHandle<SessionData> {
     let session = match cookie_value {
         Some(cookie_value) => store.load_session(cookie_value).await.ok().flatten(),
         None => None,
@@ -219,10 +223,13 @@ async fn load_or_create<
     Arc::new(RwLock::new(session.unwrap_or_default()))
 }
 
-impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clone> Layer<Inner>
-    for SessionLayer<Data, Implementation>
+impl<
+        Inner,
+        SessionData: Clone,
+        SessionStoreConnection: SessionStoreConnector<SessionData> + Clone,
+    > Layer<Inner> for SessionLayer<SessionData, SessionStoreConnection>
 {
-    type Service = Session<Inner, Data, Implementation>;
+    type Service = Session<Inner, SessionData, SessionStoreConnection>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
         let layer = self.clone();
@@ -236,18 +243,18 @@ impl<Inner, Data: Clone, Implementation: SessionStoreImplementation<Data> + Clon
 
 /// Session service container.
 #[derive(Debug)]
-pub struct Session<Inner, Data, Implementation> {
+pub struct Session<Inner, SessionData, SessionStoreConnection> {
     inner: Inner,
-    layer: Arc<Mutex<SessionLayer<Data, Implementation>>>,
+    layer: Arc<Mutex<SessionLayer<SessionData, SessionStoreConnection>>>,
 }
 
 impl<
         Inner,
         ReqBody,
         ResBody,
-        Data: Clone + Default + Debug + Send + Sync + 'static,
-        Implementation: SessionStoreImplementation<Data> + Clone + Send + Sync + 'static,
-    > Service<Request<ReqBody>> for Session<Inner, Data, Implementation>
+        SessionData: Clone + Default + Debug + Send + Sync + 'static,
+        SessionStoreConnection: SessionStoreConnector<SessionData> + 'static,
+    > Service<Request<ReqBody>> for Session<Inner, SessionData, SessionStoreConnection>
 where
     Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
     ResBody: Send + 'static,
@@ -341,7 +348,9 @@ where
     }
 }
 
-impl<Inner: Clone, Data, Implementation> Clone for Session<Inner, Data, Implementation> {
+impl<Inner: Clone, SessionData, SessionStoreConnection> Clone
+    for Session<Inner, SessionData, SessionStoreConnection>
+{
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -377,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn sets_session_cookie() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
@@ -397,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn uses_valid_session() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -428,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_cookies_in_single_header() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -463,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_cookie_headers() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -494,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_cookie_stored_when_no_session_is_required() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
@@ -586,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn destroyed_sessions_sets_removal_cookie() {
-        let store = MemoryStore::<()>::new();
+        let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
