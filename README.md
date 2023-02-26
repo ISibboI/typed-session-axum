@@ -1,4 +1,4 @@
-# Async Typed Session Management in Rust
+# Typed Session Management for Axum
 
 [![Version](https://img.shields.io/crates/v/typed-session-axum.svg?style=flat-square)](https://crates.io/crates/typed-session-axum)
 [![Downloads](https://img.shields.io/crates/d/typed-session-axum.svg?style=flat-square)](https://crates.io/crates/typed-session-axum)
