@@ -8,57 +8,146 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
-  build_and_test:
-    name: Build and test
+  precheck_default:
+    name: Check default
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macOS-latest]
-        rust: [stable, nightly]
+        os: [ubuntu-latest]
+        rust: [stable]
 
     steps:
-    - uses: actions/checkout@master
+      - uses: actions/checkout@master
 
-    - name: Install ${{ matrix.rust }}
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: ${{ matrix.rust }}
-        override: true
+      - name: Install ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+          override: true
 
-    - name: check
-      uses: actions-rs/cargo@v1
-      with:
-        command: check
-        args: --all --bins --examples
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
 
-    - name: check unstable
-      uses: actions-rs/cargo@v1
-      with:
-        command:  check
-        args: --all --benches --bins --examples --tests
+      - name: Check
+        uses: actions-rs/cargo@v1
+        with:
+          command:  check
+          args: --all --bins --examples --lib
 
-    - name: tests
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
-        args: --all
-
-  check_fmt_and_docs:
-    name: Checking fmt and docs
-    runs-on: ubuntu-latest
+  precheck_all_features:
+    name: Check all features
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        rust: [ stable, nightly ]
+        os: [ubuntu-latest]
+        rust: [stable]
+
     steps:
-    - uses: actions/checkout@master
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: ${{ matrix.rust }}
-        components: rustfmt, clippy
-        override: true
+      - uses: actions/checkout@master
 
-    - name: fmt
-      run: cargo fmt --all -- --check
+      - name: Install ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+          override: true
 
-    - name: Docs
-      run: cargo doc
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Check
+        uses: actions-rs/cargo@v1
+        with:
+          command:  check
+          args: --all-features --all --benches --bins --examples --tests --lib
+
+  check_platform_compatibility:
+    needs: [precheck_default, precheck_all_features]
+    name: Check platform compatibility
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+        rust: [stable]
+
+    steps:
+      - uses: actions/checkout@master
+
+      - name: Install ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+          override: true
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Check
+        uses: actions-rs/cargo@v1
+        with:
+          command:  check
+          args: --all-features --all --benches --bins --examples --tests --lib
+
+  detailed_tests:
+    needs: [precheck_default, precheck_all_features]
+    name: Check, test, doc, format and lint with all features
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        rust: [1.65.0, stable, beta, nightly]
+
+    steps:
+      - uses: actions/checkout@master
+
+      - name: Install ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+          override: true
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Check
+        uses: actions-rs/cargo@v1
+        with:
+          command:  check
+          args: --all-features --all --benches --bins --examples --tests --lib
+
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all-features --all
+
+      - name: Docs
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --all-features
+
+      - name: Format
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: -- --check
+
+      - name: Lint
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --all-features --all-targets
