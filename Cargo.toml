@@ -13,7 +13,7 @@ documentation = "https://docs.rs/typed-session-axum"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace.dependencies]
-typed-session = "0.1.1"
+typed-session = "0.2.0"
 
 [dependencies]
 typed-session.workspace = true
