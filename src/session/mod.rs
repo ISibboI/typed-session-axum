@@ -651,6 +651,8 @@ mod tests {
             let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let mut session = session_handle.write().await;
             session.delete();
+        } else {
+            req.extensions().get::<SessionHandle<()>>().unwrap().write().await.data_mut();
         }
 
         Ok(Response::new(req.into_body()))
