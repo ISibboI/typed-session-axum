@@ -22,7 +22,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let store = MemoryStore::<i32>::new();
+//!     let store = MemoryStore::<i32, _>::new();
 //!     let session_layer = SessionLayer::new(store);
 //!
 //!     async fn handler(mut session: WritableSession<i32>) {
@@ -53,15 +53,16 @@
 //!
 //! async fn handle(request: Request<Body>) -> Result<Response<Body>, Infallible> {
 //!     let session_handle = request.extensions().get::<SessionHandle<()>>().unwrap();
-//!     let session = session_handle.read().await;
+//!     let mut session = session_handle.write().await;
 //!     // Use the session as you'd like.
+//!     session.data_mut();
 //!
 //!     Ok(Response::new(Body::empty()))
 //! }
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = MemoryStore::<()>::new();
+//! let store = MemoryStore::<(), _>::new();
 //! let session_layer = SessionLayer::new(store);
 //!
 //! let mut service = ServiceBuilder::new()
@@ -72,16 +73,14 @@
 //!
 //! let response = service.ready().await?.call(request).await?;
 //!
-//! assert_eq!(
+//! assert!(
 //!     response
 //!         .headers()
 //!         .get(SET_COOKIE)
 //!         .unwrap()
 //!         .to_str()
 //!         .unwrap()
-//!         .split("=")
-//!         .collect::<Vec<_>>()[0],
-//!     "id"
+//!         .starts_with("id=")
 //! );
 //!
 //! # Ok(())
