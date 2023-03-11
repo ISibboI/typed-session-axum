@@ -293,15 +293,16 @@ where
 
             let session_handle = load_or_create(&session_layer.store, cookie_value).await;
 
-            // TODO update session expiry only after min update time
-            let mut session = session_handle.write().await;
-            if let Some(ttl) = session_layer.session_ttl {
-                (*session).expire_in(now, ttl);
-            }
-            drop(session);
-
             request.extensions_mut().insert(session_handle.clone());
             let mut response = inner.call(request).await?;
+
+            {
+                // TODO update session expiry only after min update time
+                let mut session = session_handle.write().await;
+                if let Some(ttl) = session_layer.session_ttl {
+                    (*session).expire_in(now, ttl);
+                }
+            }
 
             let session = RwLock::into_inner(
                 Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
@@ -382,10 +383,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sets_session_cookie() {
+    async fn does_not_set_session_cookie_by_default() {
         let store = MemoryStore::<(), _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
+
+        let request = Request::get("/").body(Body::empty()).unwrap();
+
+        let res = service.ready().await.unwrap().call(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        assert!(res
+            .headers()
+            .get(SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
+    async fn does_not_set_session_cookie_on_read() {
+        let store = MemoryStore::<(), _>::new();
+        let session_layer = SessionLayer::new(store);
+        let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo_read_session);
+
+        let request = Request::get("/").body(Body::empty()).unwrap();
+
+        let res = service.ready().await.unwrap().call(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        assert!(res
+            .headers()
+            .get(SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
+    async fn sets_session_cookie_on_write() {
+        let store = MemoryStore::<(), _>::new();
+        let session_layer = SessionLayer::new(store);
+        let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo_with_session_change);
 
         let request = Request::get("/").body(Body::empty()).unwrap();
 
@@ -398,12 +431,12 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap()
-            .starts_with("axum.sid="))
+            .starts_with("id="))
     }
 
     #[tokio::test]
     async fn uses_valid_session() {
-        let store = MemoryStore::<(), _>::new();
+        let store = MemoryStore::<i32, _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -418,7 +451,7 @@ mod tests {
 
         let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
         let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 0 });
+        assert_eq!(counter, Counter { counter: 1 });
 
         let mut request = Request::get("/").body(Body::empty()).unwrap();
         request
@@ -429,12 +462,12 @@ mod tests {
 
         let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
         let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 1 });
+        assert_eq!(counter, Counter { counter: 2 });
     }
 
     #[tokio::test]
     async fn multiple_cookies_in_single_header() {
-        let store = MemoryStore::<(), _>::new();
+        let store = MemoryStore::<i32, _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -455,7 +488,7 @@ mod tests {
 
         let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
         let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 0 });
+        assert_eq!(counter, Counter { counter: 1 });
 
         let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.headers_mut().insert(COOKIE, request_cookie);
@@ -464,12 +497,12 @@ mod tests {
 
         let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
         let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 1 });
+        assert_eq!(counter, Counter { counter: 2 });
     }
 
     #[tokio::test]
     async fn multiple_cookie_headers() {
-        let store = MemoryStore::<(), _>::new();
+        let store = MemoryStore::<i32, _>::new();
         let session_layer = SessionLayer::new(store);
         let mut service = ServiceBuilder::new()
             .layer(session_layer)
@@ -485,7 +518,7 @@ mod tests {
 
         let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
         let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 0 });
+        assert_eq!(counter, Counter { counter: 1 });
 
         let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.headers_mut().append(COOKIE, dummy_cookie);
@@ -495,21 +528,7 @@ mod tests {
 
         let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
         let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 1 });
-    }
-
-    #[tokio::test]
-    async fn no_cookie_stored_when_no_session_is_required() {
-        let store = MemoryStore::<(), _>::new();
-        let session_layer = SessionLayer::new(store);
-        let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
-
-        let request = Request::get("/").body(Body::empty()).unwrap();
-
-        let res = service.ready().await.unwrap().call(request).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-
-        assert!(res.headers().get(SET_COOKIE).is_none());
+        assert_eq!(counter, Counter { counter: 2 });
     }
 
     async fn invalid_session_check_cookie_result(
@@ -646,13 +665,11 @@ mod tests {
     }
 
     async fn destroy(req: Request<Body>) -> Result<Response<Body>, BoxError> {
-        // Destroy the session if we received a session cookie.
-        if req.headers().get(COOKIE).is_some() {
+        {
             let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let mut session = session_handle.write().await;
             session.delete();
         }
-
         Ok(Response::new(req.into_body()))
     }
 

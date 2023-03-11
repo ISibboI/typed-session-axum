@@ -22,7 +22,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let store = MemoryStore::<i32>::new();
+//!     let store = MemoryStore::<i32, _>::new();
 //!     let session_layer = SessionLayer::new(store);
 //!
 //!     async fn handler(mut session: WritableSession<i32>) {
@@ -61,7 +61,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = MemoryStore::<()>::new();
+//! let store = MemoryStore::<(), _>::new();
 //! let session_layer = SessionLayer::new(store);
 //!
 //! let mut service = ServiceBuilder::new()
