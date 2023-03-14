@@ -21,7 +21,7 @@ http-body = "0.4.5"
 tracing = "0.1"
 async-trait = "0.1.59"
 axum = {version = "0.6.8", features = ["headers"]}
-axum-extra = { version = "0.6.0", features = ["cookie"] }
+axum-extra = { version = "0.7.1", features = ["cookie"] }
 tokio = {version = "1.23.0", features = ["sync"]}
 tower = "0.4.13"
 futures = "0.3.25"
