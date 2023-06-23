@@ -5,7 +5,6 @@ use std::fmt::Debug;
 use std::{
     sync::Arc,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use axum::{
@@ -16,7 +15,6 @@ use axum::{
     response::Response,
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use chrono::Utc;
 use futures::future::BoxFuture;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
@@ -44,8 +42,6 @@ pub struct SessionLayer<SessionData, SessionStoreConnection> {
     cookie_path: String,
     cookie_name: String,
     cookie_domain: Option<String>,
-    session_ttl: Option<Duration>,
-    min_session_renew_time: Option<Duration>,
     same_site_policy: SameSite,
     secure: bool,
 }
@@ -59,8 +55,6 @@ impl<SessionData, SessionStoreConnection: Clone> Clone
             cookie_path: self.cookie_path.clone(),
             cookie_name: self.cookie_name.clone(),
             cookie_domain: self.cookie_domain.clone(),
-            session_ttl: self.session_ttl,
-            min_session_renew_time: self.min_session_renew_time,
             same_site_policy: self.same_site_policy,
             secure: self.secure,
         }
@@ -90,17 +84,20 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     ///
     /// ```rust
     /// # use typed_session_axum::{SessionLayer, typed_session::MemoryStore};
-    /// # use std::time::Duration;
+    /// # use chrono::Duration;
     /// # use axum_extra::extract::cookie::SameSite;
+    /// use typed_session::SessionRenewalStrategy;
     /// SessionLayer::new(
     ///     MemoryStore::<(), _>::new(),
     /// )
-    /// .with_cookie_name("your.cookie.name")
+    /// .with_cookie_name("id") // for security reasons, use a generic name here
     /// .with_cookie_path("/some/path")
     /// .with_cookie_domain("www.example.com")
     /// .with_same_site_policy(SameSite::Strict)
-    /// .with_session_ttl(Some(Duration::from_secs(60 * 5)))
-    /// .with_min_session_renew_time(Some(Duration::from_secs(60 * 5)))
+    /// .with_session_renewal_strategy(SessionRenewalStrategy::AutomaticRenewal {
+    ///     time_to_live: Duration::hours(24),
+    ///     maximum_remaining_time_to_live_for_renewal: Duration::hours(20),
+    /// })
     /// .with_secure(true);
     /// ```
     pub fn new(store: SessionStoreConnection) -> Self {
@@ -118,8 +115,6 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
             cookie_name: "id".into(),
             cookie_domain: None,
             same_site_policy: SameSite::Strict,
-            session_ttl: Some(Duration::from_secs(24 * 60 * 60)),
-            min_session_renew_time: None,
             secure: true,
         }
     }
@@ -149,18 +144,15 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
         self
     }
 
-    /// Sets a cookie time-to-live (ttl) for the session. Defaults to
-    /// `Duration::from_secs(60 * 60 24)`; one day.
-    pub fn with_session_ttl(mut self, session_ttl: Option<Duration>) -> Self {
-        self.session_ttl = session_ttl;
-        self
-    }
-
-    /// Sets the minimum time to wait between renewing the session.
-    /// Renewing means changing the session key, and in turn updating the ttl.
-    /// Defaults to `None`.
-    pub fn with_min_session_renew_time(mut self, min_session_renew_time: Option<Duration>) -> Self {
-        self.min_session_renew_time = min_session_renew_time;
+    /// Sets the renewal strategy for sessions.
+    /// See the members of [`SessionRenewalStrategy`] for more details.
+    /// Defaults to [`AutomaticRenewal`](SessionRenewalStrategy::AutomaticRenewal) with a ttl of 24 hours
+    /// and an automatic renewal delay of 4 hours.
+    pub fn with_session_renewal_strategy(
+        mut self,
+        session_renewal_strategy: SessionRenewalStrategy,
+    ) -> Self {
+        *self.store.session_renewal_strategy_mut() = session_renewal_strategy;
         self
     }
 
@@ -170,7 +162,7 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
         self
     }
 
-    fn build_cookie(&self, cookie_value: String) -> Cookie<'static> {
+    fn build_cookie(&self, cookie_value: String, expiry: SessionExpiry) -> Cookie<'static> {
         let mut cookie = Cookie::build(self.cookie_name.clone(), cookie_value)
             .http_only(true)
             .same_site(self.same_site_policy)
@@ -178,8 +170,11 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
             .path(self.cookie_path.clone())
             .finish();
 
-        if let Some(ttl) = self.session_ttl {
-            cookie.set_expires(Some((std::time::SystemTime::now() + ttl).into()));
+        match expiry {
+            SessionExpiry::DateTime(expiry) => cookie.set_expires(Some(
+                OffsetDateTime::from_unix_timestamp(expiry.timestamp()).unwrap(),
+            )),
+            SessionExpiry::Never => { /* no expiry by default */ }
         }
 
         if let Some(cookie_domain) = self.cookie_domain.clone() {
@@ -273,8 +268,6 @@ where
         let mut inner = std::mem::replace(&mut self.inner, inner);
 
         Box::pin(async move {
-            let now = Utc::now();
-
             // Multiple cookies may be all concatenated into a single Cookie header
             // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
             // Cookie headers (HTTP/2 behaviour). Search for the session cookie from
@@ -292,13 +285,6 @@ where
 
             let session_handle = load_or_create(&session_layer.store, cookie_value).await;
 
-            // TODO update session expiry only after min update time
-            let mut session = session_handle.write().await;
-            if let Some(ttl) = session_layer.session_ttl {
-                (*session).expire_in(now, ttl);
-            }
-            drop(session);
-
             request.extensions_mut().insert(session_handle.clone());
             let mut response = inner.call(request).await?;
 
@@ -313,12 +299,7 @@ where
                     cookie_value,
                     expiry,
                 }) => {
-                    let mut cookie = session_layer.build_cookie(cookie_value);
-                    if let SessionExpiry::DateTime(expiry) = expiry {
-                        cookie.set_expires(Some(
-                            OffsetDateTime::from_unix_timestamp(expiry.timestamp()).unwrap(),
-                        ));
-                    }
+                    let cookie = session_layer.build_cookie(cookie_value, expiry);
 
                     response.headers_mut().append(
                         SET_COOKIE,
