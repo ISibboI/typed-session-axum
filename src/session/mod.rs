@@ -40,7 +40,7 @@ pub type SessionHandle<SessionData> = Arc<RwLock<typed_session::Session<SessionD
 /// Layer that provides cookie-based sessions.
 #[derive(Debug)]
 pub struct SessionLayer<SessionData, SessionStoreConnection> {
-    store: SessionStore<SessionData, SessionStoreConnection, 64>,
+    store: SessionStore<SessionData, SessionStoreConnection>,
     cookie_path: String,
     cookie_name: String,
     cookie_domain: Option<String>,
@@ -210,9 +210,8 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
 async fn load_or_create<
     SessionData: Default + Debug,
     SessionStoreConnection: SessionStoreConnector<SessionData>,
-    const COOKIE_LENGTH: usize,
 >(
-    store: &SessionStore<SessionData, SessionStoreConnection, COOKIE_LENGTH>,
+    store: &SessionStore<SessionData, SessionStoreConnection>,
     cookie_value: Option<impl AsRef<str>>,
 ) -> SessionHandle<SessionData> {
     let session = match cookie_value {
