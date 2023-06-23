@@ -1,8 +1,7 @@
-//! typed-session-axum is a middleware providing cookie-based sessions for axum
-//! applications.
+//! Typed-session-axum is a middleware providing cookie-based sessions for axum applications.
 //!
-//! [`SessionLayer`] provides client sessions via [`async_session`]. Sessions
-//! are backed by cryptographically signed cookies. These cookies are generated
+//! [`SessionLayer`] provides client sessions via [`typed_session`]. Sessions
+//! are backed by cookies. These cookies are generated
 //! when they are not found or are otherwise invalid. When a valid, known cookie
 //! is received in a request, the session is retrieved using this cookie. The
 //! middleware provides sessions via [`SessionHandle`]. Handlers use the
