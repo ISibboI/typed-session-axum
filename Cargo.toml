@@ -1,6 +1,6 @@
 [package]
 name = "typed-session-axum"
-version = "0.1.0-alpha.0"
+version = "0.1.0-alpha.1"
 description = "Cookie-based sessions for Axum via typed-session"
 edition = "2021"
 homepage = "https://github.com/ISibboI/typed-session-axum"
