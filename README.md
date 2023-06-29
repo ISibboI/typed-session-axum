@@ -6,11 +6,21 @@
 
 API documentation: [docs.rs](https://docs.rs/typed-session-axum)
 
-**TODO**
+A session manager for [axum]() with focus on **efficiency** and **security**.
+Compared to existing art, this crate abstracts over the concrete type used to store session data, allowing to model session states in a **type-safe** way.
+Typed-session-axum was designed to live up to the [OWASP® Foundation's](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) session **security** standards, with **efficiency** and **usability** in mind.
 
-## Safety
+## Security
 
-This crate uses ``#![deny(unsafe_code)]`` to ensure everything is implemented in 100% Safe Rust.
+We have designed and implemented the crate with security in mind.
+Our design fulfils the requirements stated in [The OWASP® Foundation](https://owasp.org)'s cheat sheet on [session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html).
+We additionally hash the session ids using the fast and secure hash function [blake3](https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3) before storing them.
+To mitigate exploitable bugs we use ``#![forbid(unsafe_code)]`` to ensure everything is implemented in 100% safe Rust.
+
+For further details, refer to the [crate-level documentation](https://docs.rs/typed-session-axum).
+
+So far, this crate has not been reviewed for security.
+If you have the necessary skills and wish to contribute to an open source project, please get in touch.
 
 ## Contributing
 
