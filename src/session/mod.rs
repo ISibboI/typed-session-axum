@@ -26,8 +26,8 @@ use typed_session::{
 
 /// A type alias which provides a handle to the underlying session.
 ///
-/// This is provided via [`http::Extensions`](http::Extensions). Most
-/// applications will use the
+/// This is provided via [`http::Extensions`](axum::http::Extensions).
+/// Most applications will use the
 /// [`ReadableSession`](crate::extractors::ReadableSession) and
 /// [`WritableSession`](crate::extractors::WritableSession) extractors rather
 /// than using the handle directly. A notable exception is when using this
@@ -65,17 +65,10 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     SessionLayer<SessionData, SessionStoreConnection>
 {
     /// Creates a layer which will attach a [`SessionHandle`] to requests via an
-    /// extension. This session is derived from a cryptographically signed
-    /// cookie. When the client sends a valid, known cookie then the session is
-    /// hydrated from this. Otherwise a new cookie is created and returned in
-    /// the response.
-    ///
-    /// The default behaviour is to enable "guest" sessions with
-    /// [`PersistencePolicy::Always`].
-    ///
-    /// # Panics
-    ///
-    /// `SessionLayer::new` will panic if the secret is less than 64 bytes.
+    /// extension. This session is derived from a cookie. When the client sends
+    /// a valid, known cookie then the session is loaded using the cookie as key.
+    /// Otherwise, the `SessionHandle` will contain a default session which is
+    /// only persisted if it was mutably accessed.
     ///
     /// # Customization
     ///
@@ -119,26 +112,28 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
         }
     }
 
-    /// Sets a cookie path for the session. Defaults to `"/"`.
+    /// Sets the url path for which the session cookie is valid. Defaults to `"/"`.
     pub fn with_cookie_path(mut self, cookie_path: impl AsRef<str>) -> Self {
         self.cookie_path = cookie_path.as_ref().to_owned();
         self
     }
 
-    /// Sets a cookie name for the session. Defaults to `"axum.sid"`.
+    /// Sets the name of the session cookie. Defaults to `"id"`.
+    /// For security reasons, choose a generic name, and ideally just stick with the default.
     pub fn with_cookie_name(mut self, cookie_name: impl AsRef<str>) -> Self {
         self.cookie_name = cookie_name.as_ref().to_owned();
         self
     }
 
-    /// Sets a cookie domain for the session. Defaults to `None`.
+    /// Sets the domain for which the session cookie is valid. Defaults to `None`.
     pub fn with_cookie_domain(mut self, cookie_domain: impl AsRef<str>) -> Self {
         self.cookie_domain = Some(cookie_domain.as_ref().to_owned());
         self
     }
 
-    /// Sets a cookie same site policy for the session. Defaults to
+    /// Sets the same-site policy of the session cookie. Defaults to
     /// `SameSite::Strict`.
+    /// For security reasons, do not change this.
     pub fn with_same_site_policy(mut self, policy: SameSite) -> Self {
         self.same_site_policy = policy;
         self
@@ -156,7 +151,8 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
         self
     }
 
-    /// Sets a cookie secure attribute for the session. Defaults to `true`.
+    /// Sets the `secure` attribute for the session cookie. Defaults to `true`.
+    /// For security reasons, do not set this to `false`.
     pub fn with_secure(mut self, secure: bool) -> Self {
         self.secure = secure;
         self

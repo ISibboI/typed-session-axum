@@ -7,10 +7,8 @@ use crate::session::SessionHandle;
 use axum::{extract::FromRequestParts, http::request::Parts, Extension};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
 
-// use crate::SessionHandle;
-
-/// An extractor which provides a readable session. Sessions may have many
-/// readers.
+/// An extractor which provides a readable session.
+/// A single session may have many readers at the same time, but while a writer exists, no other reader or writer can exist.
 #[derive(Debug)]
 pub struct ReadableSession<SessionData> {
     session: OwnedRwLockReadGuard<typed_session::Session<SessionData>>,
@@ -42,8 +40,12 @@ where
     }
 }
 
-/// An extractor which provides a writable session. Sessions may have only one
-/// writer.
+/// An extractor which provides a writable session.
+/// Note that this provides an exclusive (mutable) reference to the session associated with
+/// the HTTP request.
+/// If two HTTP requests are made with the same session id, the session may be altered by both requests at the same time,
+/// resulting in conflicts in the session store.
+// TODO the documentation here points out a bug but does not explain how to handle it
 #[derive(Debug)]
 pub struct WritableSession<SessionData> {
     session: OwnedRwLockWriteGuard<typed_session::Session<SessionData>>,

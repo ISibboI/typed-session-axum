@@ -1,10 +1,11 @@
 //! Typed-session-axum is a middleware providing cookie-based sessions for axum applications.
 //!
-//! [`SessionLayer`] provides client sessions via [`typed_session`]. Sessions
-//! are backed by cookies. These cookies are generated
+//! [`SessionLayer`] provides client sessions via the [`typed_session`] crate.
+//! Sessions are backed by cookies. These cookies are generated
 //! when they are not found or are otherwise invalid. When a valid, known cookie
-//! is received in a request, the session is retrieved using this cookie. The
-//! middleware provides sessions via [`SessionHandle`]. Handlers use the
+//! is received in a request, the session data is retrieved from the session store using this cookie.
+//!
+//! The middleware provides sessions via [`SessionHandle`]. Handlers use the
 //! [`ReadableSession`](ReadableSession) and
 //! [`WritableSession`](WritableSession) extractors to read
 //! from and write to sessions respectively.
@@ -37,7 +38,7 @@
 //! }
 //! ```
 //!
-//! This middleware may also be used as a generic Tower middleware by making use
+//! This middleware may also be used as a generic [Tower](tower) middleware by making use
 //! of the [`SessionHandle`] extension:
 //!
 //! ```rust
@@ -104,3 +105,7 @@ mod extractors;
 mod session;
 
 pub use typed_session;
+
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;
