@@ -99,7 +99,7 @@
 )]
 
 pub use extractors::{ReadableSession, WritableSession};
-pub use session::{SessionHandle, SessionLayer};
+pub use session::{SessionHandle, SessionLayer /*SessionLayerError*/};
 
 mod extractors;
 mod session;

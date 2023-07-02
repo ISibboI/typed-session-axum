@@ -83,7 +83,7 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     /// SessionLayer::new(
     ///     MemoryStore::<(), _>::new(),
     /// )
-    /// .with_cookie_name("id") // for security reasons, use a generic name here
+    /// .with_cookie_name("id") // for security reasons, just stick with the default "id" here
     /// .with_cookie_path("/some/path")
     /// .with_cookie_domain("www.example.com")
     /// .with_same_site_policy(SameSite::Strict)
@@ -204,13 +204,22 @@ async fn load_or_create<
 >(
     store: &SessionStore<SessionData, SessionStoreConnection>,
     cookie_value: Option<impl AsRef<str>>,
-) -> SessionHandle<SessionData> {
-    let session = match cookie_value {
-        Some(cookie_value) => store.load_session(cookie_value).await.ok().flatten(),
-        None => None,
+) -> (
+    SessionHandle<SessionData>,
+    Result<
+        (),
+        typed_session::Error<<SessionStoreConnection as SessionStoreConnector<SessionData>>::Error>,
+    >,
+) {
+    let (session, result) = match cookie_value {
+        Some(cookie_value) => match store.load_session(cookie_value).await {
+            Ok(session) => (session, Ok(())),
+            Err(error) => (None, Err(error)),
+        },
+        None => (None, Ok(())),
     };
 
-    Arc::new(RwLock::new(session.unwrap_or_default()))
+    (Arc::new(RwLock::new(session.unwrap_or_default())), result)
 }
 
 impl<
@@ -236,6 +245,15 @@ pub struct Session<Inner, SessionData, SessionStoreConnection> {
     layer: Arc<SessionLayer<SessionData, SessionStoreConnection>>,
 }
 
+/*/// The error type for the session layer.
+#[derive(Debug)]
+pub enum SessionLayerError<SessionStoreConnectorError: Debug, InnerError> {
+    /// An error occurred in the session store.
+    SessionStore(typed_session::Error<SessionStoreConnectorError>),
+    /// An error occurred in some inner service.
+    Inner(InnerError),
+}*/
+
 impl<
         Inner,
         ReqBody,
@@ -248,13 +266,18 @@ where
     ResBody: Send + 'static,
     ReqBody: Send + 'static,
     Inner::Future: Send + 'static,
+    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send,
 {
     type Response = Inner::Response;
+    /*type Error = SessionLayerError<
+        <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error,
+        Inner::Error,
+    >;*/
     type Error = Inner::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
+        self.inner.poll_ready(cx) //.map_err(SessionLayerError::Inner)
     }
 
     fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
@@ -279,10 +302,17 @@ where
                 .map(|cookie| cookie.value().to_owned())
                 .next();
 
-            let session_handle = load_or_create(&session_layer.store, cookie_value).await;
+            let (session_handle, load_session_result) =
+                load_or_create(&session_layer.store, cookie_value).await;
+            if let Err(error) = load_session_result {
+                tracing::warn!("Failed to load session from store: {error:?}");
+            }
 
             request.extensions_mut().insert(session_handle.clone());
-            let mut response = inner.call(request).await?;
+            let mut response = inner
+                .call(request)
+                .await
+                /*.map_err(SessionLayerError::Inner)*/?;
 
             let session = RwLock::into_inner(
                 Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
