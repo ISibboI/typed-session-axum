@@ -1,3 +1,4 @@
+use axum::error_handling::HandleErrorLayer;
 use axum::routing::get;
 use axum::Router;
 use axum_extra::extract::cookie::Cookie;
@@ -5,11 +6,17 @@ use http::header::{COOKIE, SET_COOKIE};
 use http::{HeaderValue, Request, StatusCode};
 use hyper::service::Service;
 use hyper::Body;
-use tower::ServiceExt;
+use tower::{ServiceBuilder, ServiceExt};
 use typed_session::MemoryStore;
-use typed_session_axum::{ReadableSession, SessionLayer, WritableSession};
+use typed_session_axum::{ReadableSession, SessionLayer, SessionLayerError, WritableSession};
 
 fn app() -> Router {
+    async fn handle_session_layer_error<SessionStoreConnectorError, InnerError>(
+        _: SessionLayerError<SessionStoreConnectorError, InnerError>,
+    ) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+
     Router::new()
         .route("/hello-world", get(|| async { "Hello, World!" }))
         .route(
@@ -34,7 +41,11 @@ fn app() -> Router {
                 session.delete();
             }),
         )
-        .layer(SessionLayer::new(MemoryStore::<bool, _>::new()))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(handle_session_layer_error))
+                .layer(SessionLayer::new(MemoryStore::<bool, _>::new())),
+        )
 }
 
 #[tokio::test]

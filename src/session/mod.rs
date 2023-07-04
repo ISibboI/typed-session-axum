@@ -1,7 +1,7 @@
 // Much of this code is lifted directly from
 // `tide::sessions::middleware::SessionMiddleware`. See: https://github.com/http-rs/tide/blob/20fe435a9544c10f64245e883847fc3cd1d50538/src/sessions/middleware.rs
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::{
     sync::Arc,
     task::{Context, Poll},
@@ -18,7 +18,7 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use futures::future::BoxFuture;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
-use tower::{Layer, Service};
+use tower::{Layer, Service, ServiceExt};
 use typed_session::{
     SessionCookieCommand, SessionExpiry, SessionRenewalStrategy, SessionStore,
     SessionStoreConnector,
@@ -245,14 +245,30 @@ pub struct Session<Inner, SessionData, SessionStoreConnection> {
     layer: Arc<SessionLayer<SessionData, SessionStoreConnection>>,
 }
 
-/*/// The error type for the session layer.
+/// The error type for the session layer.
 #[derive(Debug)]
-pub enum SessionLayerError<SessionStoreConnectorError: Debug, InnerError> {
+pub enum SessionLayerError<SessionStoreConnectorError, InnerError> {
     /// An error occurred in the session store.
     SessionStore(typed_session::Error<SessionStoreConnectorError>),
     /// An error occurred in some inner service.
     Inner(InnerError),
-}*/
+}
+
+impl<SessionStoreConnectorError: Display, InnerError: Display> Display
+    for SessionLayerError<SessionStoreConnectorError, InnerError>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionLayerError::SessionStore(error) => write!(f, "session store error: {error}"),
+            SessionLayerError::Inner(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl<SessionStoreConnectorError: Debug + Display, InnerError: Debug + Display> std::error::Error
+    for SessionLayerError<SessionStoreConnectorError, InnerError>
+{
+}
 
 impl<
         Inner,
@@ -266,25 +282,25 @@ where
     ResBody: Send + 'static,
     ReqBody: Send + 'static,
     Inner::Future: Send + 'static,
-    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send,
+    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send + 'static,
 {
     type Response = Inner::Response;
-    /*type Error = SessionLayerError<
+    type Error = SessionLayerError<
         <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error,
         Inner::Error,
-    >;*/
-    type Error = Inner::Error;
+    >;
+    //type Error = Inner::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx) //.map_err(SessionLayerError::Inner)
+        self.inner.poll_ready(cx).map_err(SessionLayerError::Inner)
     }
 
     fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
         let session_layer = self.layer.clone();
 
         let inner = self.inner.clone();
-        let mut inner = std::mem::replace(&mut self.inner, inner);
+        let inner = std::mem::replace(&mut self.inner, inner);
 
         Box::pin(async move {
             // Multiple cookies may be all concatenated into a single Cookie header
@@ -310,9 +326,9 @@ where
 
             request.extensions_mut().insert(session_handle.clone());
             let mut response = inner
-                .call(request)
+                .oneshot(request)
                 .await
-                /*.map_err(SessionLayerError::Inner)*/?;
+                .map_err(SessionLayerError::Inner)?;
 
             let session = RwLock::into_inner(
                 Arc::try_unwrap(session_handle).expect("Session handle still has owners."),

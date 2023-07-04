@@ -15,21 +15,35 @@
 //! Using the middleware with axum is straightforward:
 //!
 //! ```rust,no_run
-//! use axum::{routing::get, Router};
+//! use axum::{routing::get, Router, error_handling::HandleErrorLayer};
 //! use typed_session_axum::{
-//!     typed_session::MemoryStore, WritableSession, SessionLayer,
+//!     typed_session::MemoryStore, WritableSession, SessionLayer, SessionLayerError
 //! };
+//! use std::fmt::Display;
+//! use http::StatusCode;
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let store = MemoryStore::<i32, _>::new();
+//!     use tower::ServiceBuilder;
+//! let store = MemoryStore::<i32, _>::new();
 //!     let session_layer = SessionLayer::new(store);
 //!
 //!     async fn handler(mut session: WritableSession<i32>) {
 //!         *session.data_mut() = 42;
 //!     }
 //!
-//!     let app = Router::new().route("/", get(handler)).layer(session_layer);
+//!     async fn error_handler<SessionStoreConnectorError: Display, InnerError: Display>(
+//!         error: SessionLayerError<SessionStoreConnectorError, InnerError>
+//!     ) -> (StatusCode, String) {
+//!         (
+//!             StatusCode::INTERNAL_SERVER_ERROR,
+//!             format!("Error: {error}"),
+//!         )   
+//!     }
+//!
+//!     let app = Router::new().route("/", get(handler)).layer(
+//!         ServiceBuilder::new().layer(HandleErrorLayer::new(error_handler)).layer(session_layer)
+//!     );
 //!
 //!     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
 //!         .serve(app.into_make_service())
@@ -99,7 +113,7 @@
 )]
 
 pub use extractors::{ReadableSession, WritableSession};
-pub use session::{SessionHandle, SessionLayer /*SessionLayerError*/};
+pub use session::{SessionHandle, SessionLayer, SessionLayerError};
 
 mod extractors;
 mod session;
