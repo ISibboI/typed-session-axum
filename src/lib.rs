@@ -1,4 +1,4 @@
-//! Typed-session-axum is a middleware providing cookie-based sessions for axum applications.
+//! **Typed-session-axum** is a middleware providing cookie-based sessions for axum applications.
 //!
 //! [`SessionLayer`] provides client sessions via the [`typed_session`] crate.
 //! Sessions are backed by cookies. These cookies are generated
@@ -9,6 +9,10 @@
 //! [`ReadableSession`](ReadableSession) and
 //! [`WritableSession`](WritableSession) extractors to read
 //! from and write to sessions respectively.
+//!
+//! The middleware expects a `SessionStoreConnection` to be present, which represents a connection
+//! to a database used to store the sessions.
+//! See [`SessionLayer::new`] for more details.
 //!
 //! # Example
 //!
@@ -25,7 +29,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let store = MemoryStore::<i32, _>::new();
+//!     let store = MemoryStore::<i32, _>::new(); // mock database connection for debugging purposes
 //!     let session_layer = SessionLayer::<i32, MemoryStore<i32, NoLogger>>::new();
 //!
 //!     async fn handler(mut session: WritableSession<i32>) {
@@ -43,9 +47,9 @@
 //!
 //!     let app = Router::new().route("/", get(handler)).layer(
 //!         ServiceBuilder::new()
-//!             .layer(HandleErrorLayer::new(error_handler))
+//!             .layer(HandleErrorLayer::new(error_handler)) // handle errors
 //!             .layer(session_layer)
-//!             .layer(Extension(store))
+//!             .layer(Extension(store)) // provide a connection to the session database
 //!     );
 //!
 //!     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
@@ -79,7 +83,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = MemoryStore::<(), _>::new();
+//! let store = MemoryStore::<(), _>::new(); // mock database connection for debugging purposes
 //! let session_layer = SessionLayer::<(), MemoryStore<(), NoLogger>>::new();
 //!
 //! let mut service = ServiceBuilder::new()
@@ -87,7 +91,7 @@
 //!     .service_fn(handle);
 //!
 //! let mut request = Request::builder().body(Body::empty()).unwrap();
-//! request.extensions_mut().insert(store);
+//! request.extensions_mut().insert(store); // provide a connection to the session database
 //!
 //! let response = service.ready().await?.call(request).await?;
 //!

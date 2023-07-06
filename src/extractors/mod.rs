@@ -45,7 +45,7 @@ where
 /// the HTTP request.
 /// If two HTTP requests are made with the same session id, the session may be altered by both requests at the same time,
 /// resulting in conflicts in the session store.
-// TODO the documentation here points out a bug but does not explain how to handle it
+/// In this case, the session layer produces an error that needs to be handled.
 #[derive(Debug)]
 pub struct WritableSession<SessionData> {
     session: OwnedRwLockWriteGuard<typed_session::Session<SessionData>>,

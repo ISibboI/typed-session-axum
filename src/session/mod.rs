@@ -36,6 +36,7 @@ use typed_session::{
 pub type SessionHandle<SessionData> = Arc<RwLock<typed_session::Session<SessionData>>>;
 
 /// Layer that provides cookie-based sessions.
+/// See [`SessionLayer::new`] for more details.
 #[derive(Debug)]
 pub struct SessionLayer<SessionData, SessionStoreConnection> {
     store: SessionStore<SessionData, SessionStoreConnection>,
@@ -77,6 +78,22 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     /// a valid, known cookie then the session is loaded using the cookie as key.
     /// Otherwise, the `SessionHandle` will contain a default session which is
     /// only persisted if it was mutably accessed.
+    ///
+    /// The layer expects the `SessionStoreConnection` to exist as an extension.
+    /// It is a type that implements [`SessionStoreConnector`] with the correct
+    /// `SessionData`.
+    /// The type is required to implement `Send`, `Sync` and `Clone`, such that
+    /// the session layer can make its own copy (required due to some details of
+    /// axum, specifically the extensions do not get automatically attached to a
+    /// response from the corresponding request).
+    ///
+    /// The `SessionStoreConnection` can e.g. be a type representing a simple
+    /// database connection, a connection pool or database transaction. Since
+    /// sessions cannot be updated concurrently, using transactions may be useful,
+    /// to be able to roll back all changes in case the session got updated.
+    /// It is important that the `SessionStoreConnection` in the extension is
+    /// ready, because `axum` does not use backpressure, but explicit readiness
+    /// checks.
     ///
     /// # Customization
     ///

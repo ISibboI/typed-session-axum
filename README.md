@@ -6,9 +6,10 @@
 
 API documentation: [docs.rs](https://docs.rs/typed-session-axum)
 
-A session manager for [axum]() with focus on **efficiency** and **security**.
-Compared to existing art, this crate abstracts over the concrete type used to store session data, allowing to model session states in a **type-safe** way.
-Typed-session-axum was designed to live up to the [OWASP® Foundation's](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) session **security** standards, with **efficiency** and **usability** in mind.
+A session manager for [axum](https://github.com/tokio-rs/axum) with focus on **efficiency** and **usability**.
+It was designed to live up to the [session security standards](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) published by the [OWASP® Foundation's](https://owasp.org).
+Compared to [existing art](https://github.com/maxcountryman/axum-sessions), this crate abstracts over the concrete type used to store session data, allowing to model session states in a **type-safe** way to unlock the full power of Rust for session management.
+
 
 ## Security
 
