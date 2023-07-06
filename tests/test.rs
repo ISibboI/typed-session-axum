@@ -1,13 +1,14 @@
 use axum::error_handling::HandleErrorLayer;
 use axum::routing::get;
-use axum::Router;
+use axum::{Extension, Router};
 use axum_extra::extract::cookie::Cookie;
 use http::header::{COOKIE, SET_COOKIE};
 use http::{HeaderValue, Request, StatusCode};
 use hyper::service::Service;
 use hyper::Body;
+use std::convert::Infallible;
 use tower::{ServiceBuilder, ServiceExt};
-use typed_session::MemoryStore;
+use typed_session::{MemoryStore, NoLogger};
 use typed_session_axum::{ReadableSession, SessionLayer, SessionLayerError, WritableSession};
 
 fn app() -> Router {
@@ -43,9 +44,12 @@ fn app() -> Router {
         )
         .layer(
             ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(handle_session_layer_error))
-                .layer(SessionLayer::new(MemoryStore::<bool, _>::new())),
+                .layer(HandleErrorLayer::new(
+                    handle_session_layer_error::<Infallible, Infallible>,
+                ))
+                .layer(SessionLayer::<bool, MemoryStore<bool, NoLogger>>::new()),
         )
+        .layer(Extension(MemoryStore::<bool, _>::new()))
 }
 
 #[tokio::test]

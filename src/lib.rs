@@ -15,18 +15,18 @@
 //! Using the middleware with axum is straightforward:
 //!
 //! ```rust,no_run
-//! use axum::{routing::get, Router, error_handling::HandleErrorLayer};
+//! use axum::{routing::get, Router, error_handling::HandleErrorLayer, Extension};
+//!  use tower::ServiceBuilder;
 //! use typed_session_axum::{
-//!     typed_session::MemoryStore, WritableSession, SessionLayer, SessionLayerError
+//!     typed_session::{MemoryStore, NoLogger}, WritableSession, SessionLayer, SessionLayerError,
 //! };
 //! use std::fmt::Display;
 //! use http::StatusCode;
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     use tower::ServiceBuilder;
-//! let store = MemoryStore::<i32, _>::new();
-//!     let session_layer = SessionLayer::new(store);
+//!     let store = MemoryStore::<i32, _>::new();
+//!     let session_layer = SessionLayer::<i32, MemoryStore<i32, NoLogger>>::new();
 //!
 //!     async fn handler(mut session: WritableSession<i32>) {
 //!         *session.data_mut() = 42;
@@ -42,7 +42,10 @@
 //!     }
 //!
 //!     let app = Router::new().route("/", get(handler)).layer(
-//!         ServiceBuilder::new().layer(HandleErrorLayer::new(error_handler)).layer(session_layer)
+//!         ServiceBuilder::new()
+//!             .layer(HandleErrorLayer::new(error_handler))
+//!             .layer(session_layer)
+//!             .layer(Extension(store))
 //!     );
 //!
 //!     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
@@ -59,7 +62,7 @@
 //! use std::convert::Infallible;
 //!
 //! use axum::http::header::SET_COOKIE;
-//! use typed_session_axum::{typed_session::MemoryStore, SessionHandle, SessionLayer};
+//! use typed_session_axum::{typed_session::{MemoryStore, NoLogger}, SessionHandle, SessionLayer};
 //! use http::{Request, Response};
 //! use hyper::Body;
 //! use rand::Rng;
@@ -77,13 +80,14 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let store = MemoryStore::<(), _>::new();
-//! let session_layer = SessionLayer::new(store);
+//! let session_layer = SessionLayer::<(), MemoryStore<(), NoLogger>>::new();
 //!
 //! let mut service = ServiceBuilder::new()
 //!     .layer(session_layer)
 //!     .service_fn(handle);
 //!
-//! let request = Request::builder().body(Body::empty()).unwrap();
+//! let mut request = Request::builder().body(Body::empty()).unwrap();
+//! request.extensions_mut().insert(store);
 //!
 //! let response = service.ready().await?.call(request).await?;
 //!
