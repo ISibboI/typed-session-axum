@@ -1,7 +1,6 @@
 // Much of this code is lifted directly from
 // `tide::sessions::middleware::SessionMiddleware`. See: https://github.com/http-rs/tide/blob/20fe435a9544c10f64245e883847fc3cd1d50538/src/sessions/middleware.rs
 
-use std::borrow::BorrowMut;
 use std::fmt::{Debug, Display, Formatter};
 use std::{
     sync::Arc,
@@ -274,98 +273,6 @@ impl<SessionStoreConnectorError: Debug + Display, InnerError: Debug + Display> s
 {
 }
 
-fn do_session_service<
-    Inner,
-    ReqBody,
-    ResBody,
-    SessionData: Clone + Default + Debug + Send + Sync + 'static,
-    SessionStoreConnection: SessionStoreConnector<SessionData> + Send + Sync + 'static,
->(
-    mut request: Request<ReqBody>,
-    session_layer: Arc<SessionLayer<SessionData, SessionStoreConnection>>,
-    inner: Inner,
-    mut connection: impl BorrowMut<SessionStoreConnection> + Send + Sync + 'static,
-) -> BoxFuture<
-    'static,
-    Result<
-        Inner::Response,
-        SessionLayerError<
-            <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error,
-            Inner::Error,
-        >,
-    >,
->
-where
-    Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
-    ResBody: Send + 'static,
-    ReqBody: Send + 'static,
-    Inner::Future: Send + 'static,
-    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send + 'static,
-{
-    Box::pin(async move {
-        // Multiple cookies may be all concatenated into a single Cookie header
-        // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
-        // Cookie headers (HTTP/2 behaviour). Search for the session cookie from
-        // all Cookie headers, assuming both forms are possible.
-        let cookie_value = request
-            .headers()
-            .get_all(COOKIE)
-            .iter()
-            .filter_map(|cookie_header| cookie_header.to_str().ok())
-            .flat_map(|cookie_header| cookie_header.split(';'))
-            .filter_map(|cookie_header| Cookie::parse_encoded(cookie_header.trim()).ok())
-            .filter(|cookie| cookie.name() == session_layer.cookie_name)
-            .map(|cookie| cookie.value().to_owned())
-            .next();
-
-        let (session_handle, load_session_result) =
-            load_or_create(&session_layer.store, cookie_value, connection.borrow_mut()).await;
-        if let Err(error) = load_session_result {
-            tracing::warn!("Failed to load session from store: {error:?}");
-        }
-
-        request.extensions_mut().insert(session_handle.clone());
-        let mut response = inner
-            .oneshot(request)
-            .await
-            .map_err(SessionLayerError::Inner)?;
-
-        let session = RwLock::into_inner(
-            Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
-        );
-
-        let store = &session_layer.store;
-        match store.store_session(session, connection.borrow_mut()).await {
-            Ok(SessionCookieCommand::DoNothing) => {}
-            Ok(SessionCookieCommand::Set {
-                cookie_value,
-                expiry,
-            }) => {
-                let cookie = session_layer.build_cookie(cookie_value, expiry);
-
-                response.headers_mut().append(
-                    SET_COOKIE,
-                    HeaderValue::from_str(&cookie.to_string()).unwrap(),
-                );
-            }
-            Ok(SessionCookieCommand::Delete) => {
-                let removal_cookie = session_layer.build_removal_cookie();
-
-                response.headers_mut().append(
-                    SET_COOKIE,
-                    HeaderValue::from_str(&removal_cookie.to_string()).unwrap(),
-                );
-            }
-            Err(error) => {
-                tracing::error!("Failed to store session: {error:?}");
-                *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-            }
-        }
-
-        Ok(response)
-    })
-}
-
 impl<
         Inner,
         ReqBody,
@@ -391,19 +298,80 @@ where
         self.inner.poll_ready(cx).map_err(SessionLayerError::Inner)
     }
 
-    fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
+    fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
         let session_layer = self.layer.clone();
 
         let inner = self.inner.clone();
         let inner = std::mem::replace(&mut self.inner, inner);
 
-        let connection = request
+        let mut connection = request
             .extensions()
             .get::<SessionStoreConnection>()
             .expect("session service requires a session store connection in the extensions.")
             .clone();
 
-        do_session_service(request, session_layer, inner, connection)
+        Box::pin(async move {
+            // Multiple cookies may be all concatenated into a single Cookie header
+            // separated with semicolons (HTTP/1.1 behaviour) or into multiple separate
+            // Cookie headers (HTTP/2 behaviour). Search for the session cookie from
+            // all Cookie headers, assuming both forms are possible.
+            let cookie_value = request
+                .headers()
+                .get_all(COOKIE)
+                .iter()
+                .filter_map(|cookie_header| cookie_header.to_str().ok())
+                .flat_map(|cookie_header| cookie_header.split(';'))
+                .filter_map(|cookie_header| Cookie::parse_encoded(cookie_header.trim()).ok())
+                .filter(|cookie| cookie.name() == session_layer.cookie_name)
+                .map(|cookie| cookie.value().to_owned())
+                .next();
+
+            let (session_handle, load_session_result) =
+                load_or_create(&session_layer.store, cookie_value, &mut connection).await;
+            if let Err(error) = load_session_result {
+                tracing::warn!("Failed to load session from store: {error:?}");
+            }
+
+            request.extensions_mut().insert(session_handle.clone());
+            let mut response = inner
+                .oneshot(request)
+                .await
+                .map_err(SessionLayerError::Inner)?;
+
+            let session = RwLock::into_inner(
+                Arc::try_unwrap(session_handle).expect("Session handle still has owners."),
+            );
+
+            let store = &session_layer.store;
+            match store.store_session(session, &mut connection).await {
+                Ok(SessionCookieCommand::DoNothing) => {}
+                Ok(SessionCookieCommand::Set {
+                    cookie_value,
+                    expiry,
+                }) => {
+                    let cookie = session_layer.build_cookie(cookie_value, expiry);
+
+                    response.headers_mut().append(
+                        SET_COOKIE,
+                        HeaderValue::from_str(&cookie.to_string()).unwrap(),
+                    );
+                }
+                Ok(SessionCookieCommand::Delete) => {
+                    let removal_cookie = session_layer.build_removal_cookie();
+
+                    response.headers_mut().append(
+                        SET_COOKIE,
+                        HeaderValue::from_str(&removal_cookie.to_string()).unwrap(),
+                    );
+                }
+                Err(error) => {
+                    tracing::error!("Failed to store session: {error:?}");
+                    *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                }
+            }
+
+            Ok(response)
+        })
     }
 }
 
