@@ -14,7 +14,7 @@ rust-version = "1.67.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace.dependencies]
-typed-session = "0.7.0"
+typed-session = "0.8.0"
 
 [dependencies]
 typed-session.workspace = true
