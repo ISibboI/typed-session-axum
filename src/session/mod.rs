@@ -242,11 +242,8 @@ async fn load_or_create<
     (Arc::new(RwLock::new(session.unwrap_or_default())), result)
 }
 
-impl<
-        Inner,
-        SessionData: Clone,
-        SessionStoreConnection: SessionStoreConnector<SessionData> + Clone,
-    > Layer<Inner> for SessionLayer<SessionData, SessionStoreConnection>
+impl<Inner, SessionData, SessionStoreConnection: SessionStoreConnector<SessionData> + Clone>
+    Layer<Inner> for SessionLayer<SessionData, SessionStoreConnection>
 {
     type Service = Session<Inner, SessionData, SessionStoreConnection>;
 
@@ -294,7 +291,7 @@ impl<
         Inner,
         ReqBody,
         ResBody,
-        SessionData: Clone + Default + Debug + Send + Sync + 'static,
+        SessionData: Default + Debug + Send + Sync + 'static,
         SessionStoreConnection: SessionStoreConnector<SessionData> + Clone + Send + Sync + 'static,
     > Service<Request<ReqBody>> for Session<Inner, SessionData, SessionStoreConnection>
 where
