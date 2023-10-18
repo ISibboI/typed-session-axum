@@ -27,7 +27,7 @@ tokio = {version = "1.33.0", features = ["sync"]}
 tower = "0.4.13"
 futures = "0.3.28"
 rand = "0.8.5"
-time = "0.3.29"
+time = "0.3.30"
 chrono = "0.4.26"
 
 
