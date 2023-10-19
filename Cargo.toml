@@ -20,7 +20,7 @@ typed-session = "0.9.0"
 typed-session.workspace = true
 http-body = "0.4.5"
 tracing = "0.1.39"
-async-trait = "0.1.68"
+async-trait = "0.1.74"
 axum = {version = "0.6.20", features = ["headers"]}
 axum-extra = { version = "0.8.0", features = ["cookie"] }
 tokio = {version = "1.33.0", features = ["sync"]}
