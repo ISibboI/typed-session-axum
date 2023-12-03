@@ -178,12 +178,12 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     }
 
     fn build_cookie(&self, cookie_value: String, expiry: SessionExpiry) -> Cookie<'static> {
-        let mut cookie = Cookie::build(self.cookie_name.clone(), cookie_value)
+        let mut cookie = Cookie::build((self.cookie_name.clone(), cookie_value))
             .http_only(true)
             .same_site(self.same_site_policy)
             .secure(self.secure)
             .path(self.cookie_path.clone())
-            .finish();
+            .build();
 
         match expiry {
             SessionExpiry::DateTime(expiry) => cookie.set_expires(Some(
@@ -200,7 +200,7 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
     }
 
     fn build_removal_cookie(&self) -> Cookie<'static> {
-        let cookie = Cookie::build(self.cookie_name.clone(), "")
+        let cookie = Cookie::build((self.cookie_name.clone(), ""))
             .http_only(true)
             .path(self.cookie_path.clone());
 
@@ -209,7 +209,7 @@ impl<SessionData, SessionStoreConnection: SessionStoreConnector<SessionData>>
         } else {
             cookie
         }
-        .finish();
+        .build();
 
         cookie.make_removal();
 
@@ -288,18 +288,16 @@ impl<SessionStoreConnectorError: Debug + Display, InnerError: Debug + Display> s
 }
 
 impl<
-        Inner,
-        ReqBody,
-        ResBody,
+        Inner: 'static,
+        RequestBody: Send + 'static,
+        ResponseBody: Send,
         SessionData: Default + Debug + Send + Sync + 'static,
         SessionStoreConnection: SessionStoreConnector<SessionData> + Clone + Send + Sync + 'static,
-    > Service<Request<ReqBody>> for Session<Inner, SessionData, SessionStoreConnection>
+    > Service<Request<RequestBody>> for Session<Inner, SessionData, SessionStoreConnection>
 where
-    Inner: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
-    ResBody: Send + 'static,
-    ReqBody: Send + 'static,
-    Inner::Future: Send + 'static,
-    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send + 'static,
+    Inner: Service<Request<RequestBody>, Response = Response<ResponseBody>> + Clone + Send,
+    Inner::Future: Send,
+    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send,
 {
     type Response = Inner::Response;
     type Error = SessionLayerError<
@@ -312,7 +310,7 @@ where
         self.inner.poll_ready(cx).map_err(SessionLayerError::Inner)
     }
 
-    fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
+    fn call(&mut self, mut request: Request<RequestBody>) -> Self::Future {
         let session_layer = self.layer.clone();
 
         let inner = self.inner.clone();
@@ -408,18 +406,11 @@ mod tests {
         header::{COOKIE, SET_COOKIE},
         HeaderValue, StatusCode,
     };
-    use hyper::Body;
-    use serde::{Deserialize, Serialize};
     use std::str::FromStr;
     use tower::{BoxError, Service, ServiceBuilder, ServiceExt};
     use typed_session::{DefaultLogger, NoLogger};
 
     use crate::{typed_session::MemoryStore, SessionHandle, SessionLayer};
-
-    #[derive(Deserialize, Serialize, PartialEq, Debug)]
-    struct Counter {
-        counter: i32,
-    }
 
     enum ExpectedResult {
         Some,
@@ -434,7 +425,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(echo_with_session_change);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store);
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -457,7 +448,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(increment);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -465,11 +456,10 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
 
-        let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
-        let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 1 });
+        let counter = res.into_body();
+        assert_eq!(counter, 1);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request
             .headers_mut()
             .insert(COOKIE, session_cookie.to_owned());
@@ -477,9 +467,8 @@ mod tests {
         let res = service.ready().await.unwrap().call(request).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
-        let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
-        let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 2 });
+        let counter = res.into_body();
+        assert_eq!(counter, 2);
     }
 
     #[tokio::test]
@@ -490,7 +479,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(increment);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -504,19 +493,17 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
 
-        let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
-        let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 1 });
+        let counter = res.into_body();
+        assert_eq!(counter, 1);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.headers_mut().insert(COOKIE, request_cookie);
         request.extensions_mut().insert(store);
         let res = service.ready().await.unwrap().call(request).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
-        let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
-        let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 2 });
+        let counter = res.into_body();
+        assert_eq!(counter, 2);
     }
 
     #[tokio::test]
@@ -527,7 +514,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(increment);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -536,20 +523,18 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
 
-        let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
-        let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 1 });
+        let counter = res.into_body();
+        assert_eq!(counter, 1);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.headers_mut().append(COOKIE, dummy_cookie);
         request.headers_mut().append(COOKIE, session_cookie);
         request.extensions_mut().insert(store);
         let res = service.ready().await.unwrap().call(request).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
-        let json_bs = &hyper::body::to_bytes(res.into_body()).await.unwrap()[..];
-        let counter: Counter = serde_json::from_slice(json_bs).unwrap();
-        assert_eq!(counter, Counter { counter: 2 });
+        let counter = res.into_body();
+        assert_eq!(counter, 2);
     }
 
     #[tokio::test]
@@ -558,7 +543,7 @@ mod tests {
         let session_layer: SessionLayer<i32, MemoryStore<i32, NoLogger>> = SessionLayer::new();
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store);
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -579,7 +564,7 @@ mod tests {
             .layer(&session_layer)
             .service_fn(echo_read_session);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -606,7 +591,7 @@ mod tests {
                         echo_read_session(req).await
                     }
                 });
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request
             .headers_mut()
             .insert(COOKIE, "axum.sid=aW52YWxpZC1zZXNzaW9uLWlk".parse().unwrap());
@@ -650,7 +635,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(destroy);
 
-        let mut request = Request::get("/").body(Body::empty()).unwrap();
+        let mut request = Request::get("/").body("").unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -663,7 +648,7 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        let mut request = Request::get("/destroy").body(Body::empty()).unwrap();
+        let mut request = Request::get("/destroy").body("").unwrap();
         request
             .headers_mut()
             .insert(COOKIE, session_cookie.parse().unwrap());
@@ -677,11 +662,11 @@ mod tests {
         );
     }
 
-    async fn echo(req: Request<Body>) -> Result<Response<Body>, BoxError> {
+    async fn echo<Body>(req: Request<Body>) -> Result<Response<Body>, BoxError> {
         Ok(Response::new(req.into_body()))
     }
 
-    async fn echo_read_session(req: Request<Body>) -> Result<Response<Body>, BoxError> {
+    async fn echo_read_session<Body>(req: Request<Body>) -> Result<Response<Body>, BoxError> {
         {
             let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let session = session_handle.write().await;
@@ -690,7 +675,9 @@ mod tests {
         Ok(Response::new(req.into_body()))
     }
 
-    async fn echo_with_session_change(req: Request<Body>) -> Result<Response<Body>, BoxError> {
+    async fn echo_with_session_change<Body>(
+        req: Request<Body>,
+    ) -> Result<Response<Body>, BoxError> {
         {
             let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
             let mut session = session_handle.write().await;
@@ -699,7 +686,7 @@ mod tests {
         Ok(Response::new(req.into_body()))
     }
 
-    async fn destroy(req: Request<Body>) -> Result<Response<Body>, BoxError> {
+    async fn destroy<Body>(req: Request<Body>) -> Result<Response<Body>, BoxError> {
         // Destroy the session if we received a session cookie.
         if req.headers().get(COOKIE).is_some() {
             let session_handle = req.extensions().get::<SessionHandle<()>>().unwrap();
@@ -717,7 +704,7 @@ mod tests {
         Ok(Response::new(req.into_body()))
     }
 
-    async fn increment(mut req: Request<Body>) -> Result<Response<Body>, BoxError> {
+    async fn increment<Body>(req: Request<Body>) -> Result<Response<i32>, BoxError> {
         let counter;
 
         {
@@ -727,9 +714,6 @@ mod tests {
             counter = *session.data();
         }
 
-        let body = serde_json::to_string(&Counter { counter }).unwrap();
-        *req.body_mut() = Body::from(body);
-
-        Ok(Response::new(req.into_body()))
+        Ok(Response::new(counter))
     }
 }
