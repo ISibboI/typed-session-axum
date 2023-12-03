@@ -9,7 +9,7 @@ keywords = ["axum", "session", "sessions", "cookie", "typed-session"]
 categories = ["web-programming"]
 repository = "https://github.com/ISibboI/typed-session-axum"
 documentation = "https://docs.rs/typed-session-axum"
-rust-version = "1.67.0"
+rust-version = "1.74.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
