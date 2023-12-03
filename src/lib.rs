@@ -20,11 +20,12 @@
 //!
 //! ```rust,no_run
 //! use axum::{routing::get, Router, error_handling::HandleErrorLayer, Extension};
-//!  use tower::ServiceBuilder;
+//! use tower::ServiceBuilder;
 //! use typed_session_axum::{
 //!     typed_session::{MemoryStore, NoLogger}, WritableSession, SessionLayer, SessionLayerError,
 //! };
 //! use std::fmt::Display;
+//! use tokio::net::TcpListener;
 //! use http::StatusCode;
 //!
 //! #[tokio::main]
@@ -52,10 +53,8 @@
 //!             .layer(Extension(store)) // provide a connection to the session database
 //!     );
 //!
-//!     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-//!         .serve(app.into_make_service())
-//!         .await
-//!         .unwrap();
+//!     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+//!     axum::serve(listener, app).await.unwrap();
 //! }
 //! ```
 //!
@@ -68,17 +67,16 @@
 //! use axum::http::header::SET_COOKIE;
 //! use typed_session_axum::{typed_session::{MemoryStore, NoLogger}, SessionHandle, SessionLayer};
 //! use http::{Request, Response};
-//! use hyper::Body;
 //! use rand::Rng;
 //! use tower::{Service, ServiceBuilder, ServiceExt};
 //!
-//! async fn handle(request: Request<Body>) -> Result<Response<Body>, Infallible> {
+//! async fn handle<Body: Default>(request: Request<Body>) -> Result<Response<Body>, Infallible> {
 //!     let session_handle = request.extensions().get::<SessionHandle<()>>().unwrap();
 //!     let mut session = session_handle.write().await;
 //!     // Use the session as you'd like.
 //!     session.data_mut();
 //!
-//!     Ok(Response::new(Body::empty()))
+//!     Ok(Response::new(Default::default()))
 //! }
 //!
 //! # #[tokio::main]
@@ -90,7 +88,7 @@
 //!     .layer(session_layer)
 //!     .service_fn(handle);
 //!
-//! let mut request = Request::builder().body(Body::empty()).unwrap();
+//! let mut request = Request::builder().body(String::new()).unwrap();
 //! request.extensions_mut().insert(store); // provide a connection to the session database
 //!
 //! let response = service.ready().await?.call(request).await?;
