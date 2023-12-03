@@ -288,17 +288,16 @@ impl<SessionStoreConnectorError: Debug + Display, InnerError: Debug + Display> s
 }
 
 impl<
-        Inner,
+        Inner: 'static,
         RequestBody: Send + 'static,
-        ResponseBody: Send + 'static,
+        ResponseBody: Send,
         SessionData: Default + Debug + Send + Sync + 'static,
         SessionStoreConnection: SessionStoreConnector<SessionData> + Clone + Send + Sync + 'static,
     > Service<Request<RequestBody>> for Session<Inner, SessionData, SessionStoreConnection>
 where
-    Inner:
-        Service<Request<RequestBody>, Response = Response<ResponseBody>> + Clone + Send + 'static,
-    Inner::Future: Send + 'static,
-    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send + 'static,
+    Inner: Service<Request<RequestBody>, Response = Response<ResponseBody>> + Clone + Send,
+    Inner::Future: Send,
+    <SessionStoreConnection as SessionStoreConnector<SessionData>>::Error: Send,
 {
     type Response = Inner::Response;
     type Error = SessionLayerError<
