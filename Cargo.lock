@@ -1097,6 +1097,7 @@ dependencies = [
  "futures",
  "http",
  "http-body",
+ "http-body-util",
  "hyper",
  "rand",
  "serde",

@@ -1,10 +1,11 @@
+use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::routing::get;
 use axum::{Extension, Router};
 use axum_extra::extract::cookie::Cookie;
-use futures::StreamExt;
 use http::header::{COOKIE, SET_COOKIE};
 use http::{HeaderValue, Request, StatusCode};
+use http_body_util::BodyExt;
 use std::convert::Infallible;
 use tower::{Service, ServiceBuilder, ServiceExt};
 use typed_session::{MemoryStore, NoLogger};
@@ -61,7 +62,7 @@ async fn test_hello_world() {
         .oneshot(
             Request::builder()
                 .uri("/hello-world")
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -69,14 +70,8 @@ async fn test_hello_world() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(body, "Hello, World!".as_bytes());
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"Hello, World!");
 }
 
 #[tokio::test]
@@ -88,7 +83,7 @@ async fn test_persistent_session() {
         .call(
             Request::builder()
                 .uri("/delete")
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -99,24 +94,18 @@ async fn test_persistent_session() {
 
     // Calling get without a cookie should return the default value, and return no cookie.
     let response = app
-        .call(Request::builder().uri("/get").body(String::new()).unwrap())
+        .call(Request::builder().uri("/get").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(SET_COOKIE));
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"false");
 
     // Calling set should return a new cookie associated with the value true.
     let response = app
-        .call(Request::builder().uri("/set").body(String::new()).unwrap())
+        .call(Request::builder().uri("/set").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -125,28 +114,18 @@ async fn test_persistent_session() {
     let cookie = response.headers().get(SET_COOKIE).unwrap().clone();
     let cookie = Cookie::parse_encoded(cookie.to_str().unwrap()).unwrap();
     println!("{cookie:?}");
-    assert!(response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .is_none());
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"");
 
     // Calling get without cookie should return the default value.
     let response = app
-        .call(Request::builder().uri("/get").body(String::new()).unwrap())
+        .call(Request::builder().uri("/get").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(SET_COOKIE));
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"false");
 
     // Calling get with the previous cookie should remember the value.
@@ -155,7 +134,7 @@ async fn test_persistent_session() {
             Request::builder()
                 .uri("/get")
                 .header(COOKIE, HeaderValue::from_str(&cookie.to_string()).unwrap())
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -163,13 +142,7 @@ async fn test_persistent_session() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(SET_COOKIE));
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"true");
 
     // Calling unset should return a new cookie associated with the value false.
@@ -178,7 +151,7 @@ async fn test_persistent_session() {
             Request::builder()
                 .uri("/unset")
                 .header(COOKIE, HeaderValue::from_str(&cookie.to_string()).unwrap())
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -189,12 +162,8 @@ async fn test_persistent_session() {
     let cookie2 = response.headers().get(SET_COOKIE).unwrap().clone();
     let cookie2 = Cookie::parse_encoded(cookie2.to_str().unwrap()).unwrap();
     println!("{cookie2:?}");
-    assert!(response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .is_none());
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"");
 
     // Calling get with the old cookie should return the default value false.
     let response = app
@@ -202,7 +171,7 @@ async fn test_persistent_session() {
             Request::builder()
                 .uri("/get")
                 .header(COOKIE, HeaderValue::from_str(&cookie.to_string()).unwrap())
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -210,13 +179,7 @@ async fn test_persistent_session() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(SET_COOKIE));
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"false");
 
     // Calling get with the new cookie should return the previously set value false.
@@ -225,7 +188,7 @@ async fn test_persistent_session() {
             Request::builder()
                 .uri("/get")
                 .header(COOKIE, HeaderValue::from_str(&cookie2.to_string()).unwrap())
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -233,13 +196,7 @@ async fn test_persistent_session() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(SET_COOKIE));
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"false");
 
     // Calling set with the first cookie should return a new cookie associated with the value true.
@@ -249,7 +206,7 @@ async fn test_persistent_session() {
             Request::builder()
                 .uri("/set")
                 .header(COOKIE, HeaderValue::from_str(&cookie.to_string()).unwrap())
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -260,12 +217,8 @@ async fn test_persistent_session() {
     let cookie3 = response.headers().get(SET_COOKIE).unwrap().clone();
     let cookie3 = Cookie::parse_encoded(cookie3.to_str().unwrap()).unwrap();
     println!("{cookie3:?}");
-    assert!(response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .is_none());
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"");
 
     // Calling get with the newest cookie should return the previously set value true.
     // This should not be disturbed by the fact that the value was set while passing an illegal cookie.
@@ -274,7 +227,7 @@ async fn test_persistent_session() {
             Request::builder()
                 .uri("/get")
                 .header(COOKIE, HeaderValue::from_str(&cookie3.to_string()).unwrap())
-                .body(String::new())
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -282,12 +235,6 @@ async fn test_persistent_session() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(SET_COOKIE));
-    let body = response
-        .into_body()
-        .into_data_stream()
-        .next()
-        .await
-        .unwrap()
-        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"true");
 }

@@ -400,7 +400,10 @@ impl<Inner: Clone, SessionData, SessionStoreConnection: Clone> Clone
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{Request, Response};
+    use axum::{
+        body::Body,
+        http::{Request, Response},
+    };
     use axum_extra::extract::cookie::Cookie;
     use http::{
         header::{COOKIE, SET_COOKIE},
@@ -425,7 +428,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(echo_with_session_change);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store);
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -448,7 +451,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(increment);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -459,7 +462,7 @@ mod tests {
         let counter = res.into_body();
         assert_eq!(counter, 1);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request
             .headers_mut()
             .insert(COOKIE, session_cookie.to_owned());
@@ -479,7 +482,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(increment);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -496,7 +499,7 @@ mod tests {
         let counter = res.into_body();
         assert_eq!(counter, 1);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.headers_mut().insert(COOKIE, request_cookie);
         request.extensions_mut().insert(store);
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -514,7 +517,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(increment);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -526,7 +529,7 @@ mod tests {
         let counter = res.into_body();
         assert_eq!(counter, 1);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.headers_mut().append(COOKIE, dummy_cookie);
         request.headers_mut().append(COOKIE, session_cookie);
         request.extensions_mut().insert(store);
@@ -543,7 +546,7 @@ mod tests {
         let session_layer: SessionLayer<i32, MemoryStore<i32, NoLogger>> = SessionLayer::new();
         let mut service = ServiceBuilder::new().layer(session_layer).service_fn(echo);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store);
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -564,7 +567,7 @@ mod tests {
             .layer(&session_layer)
             .service_fn(echo_read_session);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -591,7 +594,7 @@ mod tests {
                         echo_read_session(req).await
                     }
                 });
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request
             .headers_mut()
             .insert(COOKIE, "axum.sid=aW52YWxpZC1zZXNzaW9uLWlk".parse().unwrap());
@@ -635,7 +638,7 @@ mod tests {
             .layer(session_layer)
             .service_fn(destroy);
 
-        let mut request = Request::get("/").body("").unwrap();
+        let mut request = Request::get("/").body(Body::empty()).unwrap();
         request.extensions_mut().insert(store.clone());
 
         let res = service.ready().await.unwrap().call(request).await.unwrap();
@@ -648,7 +651,7 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        let mut request = Request::get("/destroy").body("").unwrap();
+        let mut request = Request::get("/destroy").body(Body::empty()).unwrap();
         request
             .headers_mut()
             .insert(COOKIE, session_cookie.parse().unwrap());
